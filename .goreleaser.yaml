@@ -1,0 +1,71 @@
+# GoReleaser config: builds the same static targets as `make dist`.
+# Docs: https://goreleaser.com
+version: 2
+
+project_name: nethole
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: nethole
+    main: ./cmd/nethole
+    binary: nethole
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -X main.version={{.Version}}
+      - -X main.commit={{.Commit}}
+      - -X main.date={{.Date}}
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+      - arm
+    goarm:
+      - "7"
+    ignore:
+      - goos: darwin
+        goarch: arm
+      - goos: windows
+        goarch: arm
+      - goos: windows
+        goarch: arm64
+
+archives:
+  - id: default
+    formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    name_template: >-
+      {{ .ProjectName }}-{{ .Version }}-{{ .Os }}-{{ .Arch }}{{ if .Arm }}v{{ .Arm }}{{ end }}
+
+checksum:
+  name_template: "SHA256SUMS"
+  algorithm: sha256
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+
+release:
+  draft: false
+  prerelease: auto
+  footer: |
+    ## 安装 / Install
+    下载对应平台的文件，`chmod +x` 后直接运行，无需任何运行时依赖。
+    Download the file for your platform, `chmod +x`, run. No runtime required.
+
+    > 零遥测、零上传。The only traffic is the probes you configure.

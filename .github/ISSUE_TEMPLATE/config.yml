@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 📖 阅读 README / Read the README
+    url: https://github.com/wangzi5151/nethole-tester#readme
+    about: 安装、快速开始、结果解读、FAQ 都在这里。
+  - name: 🔒 隐私说明 / Privacy
+    url: https://github.com/wangzi5151/nethole-tester#-隐私铁则--privacy
+    about: 本工具零遥测、零上传，可自行审计源码。

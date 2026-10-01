@@ -1,0 +1,22 @@
+# build artifacts
+/bin/
+/dist/
+
+# runtime output (keep the directory concept, ignore its contents)
+/nethole-out/
+*.jsonl
+*.csv
+report.html
+complaint.txt
+!internal/**/*.csv
+
+# editors / os
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
+
+# go
+*.test
+*.out

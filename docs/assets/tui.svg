@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1104" height="348" viewBox="0 0 1104 348" font-family="Menlo,Consolas,'DejaVu Sans Mono','Noto Sans Mono CJK SC','PingFang SC','Microsoft YaHei',monospace">
+<rect width="100%" height="100%" rx="12" fill="#0d1117"/>
+<rect width="100%" height="40" rx="12" fill="#161b22"/>
+<rect y="28" width="100%" height="12" fill="#161b22"/>
+<circle cx="24" cy="20.0" r="6" fill="#ff5f56"/>
+<circle cx="44" cy="20.0" r="6" fill="#ffbd2e"/>
+<circle cx="64" cy="20.0" r="6" fill="#27c93f"/>
+<text x="552.0" y="25.0" fill="#8b949e" font-size="13" text-anchor="middle">nethole — live dashboard</text>
+<text x="22" y="66" fill="#3ddc84" font-size="14" xml:space="preserve"> NetHole-Tester  网络隐形断流探测器 / invisible-drop detector</text>
+<text x="22" y="90" fill="#8b949e" font-size="14" xml:space="preserve"> preset=dorm  interval=1s  elapsed=43s  holes=2  samples=192  lost=3</text>
+<text x="22" y="114" fill="#30363d" font-size="14" xml:space="preserve">────────────────────────────────────────────────────────────────────────────────────────────────</text>
+<text x="22" y="138" fill="#ff5c5c" font-size="14" xml:space="preserve"> ICMP-Ping    TIMEOUT     ▁▁▁▁▁▁▁▁▁▁▁▁█▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁  ··············███······················█</text>
+<text x="22" y="162" fill="#4aa8ff" font-size="14" xml:space="preserve"> TCP-SYN      45.3ms      ▄▆▇▇▇▆▄▂▁▁▁▂▄▆▇█▇▅▄▂▁▁▁▃▅▆▇▇▇▅▃▁▁▁▂▃▅▇▇▇  ········································</text>
+<text x="22" y="186" fill="#ffb74d" font-size="14" xml:space="preserve"> DNS-Query    25.1ms      ▄▅▆▇▇█▇▇▆▅▄▃▂▁▁▁▁▁▂▃▄▅▆▇▇▇▇▇▆▄▃▂▂▁▁▁▁▂▂▄  ········································</text>
+<text x="22" y="210" fill="#30363d" font-size="14" xml:space="preserve">────────────────────────────────────────────────────────────────────────────────────────────────</text>
+<text x="22" y="234" fill="#8b949e" font-size="14" xml:space="preserve"> 最近网洞 / recent holes:</text>
+<text x="22" y="258" fill="#c9d1d9" font-size="14" xml:space="preserve">  11:05:47 ICMP-Ping    3.0s  3 consecutive probe failures on 223.5.5.5</text>
+<text x="22" y="282" fill="#c9d1d9" font-size="14" xml:space="preserve">  11:05:26 ICMP-Ping   16.0s  latency spike 480ms on 223.5.5.5 (baseline 32ms)</text>
+<text x="22" y="306" fill="#c9d1d9" font-size="14" xml:space="preserve"> [q] 停止并导出报告 / stop &amp; export  ·  Ctrl+C 退出</text>
+</svg>
