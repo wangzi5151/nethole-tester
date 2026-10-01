@@ -50,7 +50,8 @@ func WriteComplaint(w io.Writer, a *analyze.Analysis, meta Meta) {
 	fmt.Fprintf(w, "  监控时段 Period : %s ~ %s\n", a.Start.Format("2006-01-02 15:04:05"), a.End.Format("2006-01-02 15:04:05"))
 	fmt.Fprintf(w, "  监控时长 Duration: %s\n", a.Duration.Round(time.Second))
 	fmt.Fprintf(w, "  采样总数 Samples : %d\n", a.TotalSamples)
-	fmt.Fprintf(w, "  异常事件 Holes   : %d 次，累计异常 %s\n", len(a.Events), a.HoleDuration.Round(time.Second))
+	fmt.Fprintf(w, "  异常事件 Holes   : 原始 %d 条，合并为 %d 起，累计异常 %s\n",
+		len(a.Events), len(a.Incidents), a.HoleDuration.Round(time.Second))
 	fmt.Fprintln(w)
 
 	for _, k := range analyze.SortedKinds(a.Kinds) {
@@ -60,14 +61,16 @@ func WriteComplaint(w io.Writer, a *analyze.Analysis, meta Meta) {
 	}
 	fmt.Fprintln(w)
 
-	fmt.Fprintln(w, "【三、异常时间轴 / Event timeline】")
-	if len(a.Events) == 0 {
+	fmt.Fprintln(w, "【三、异常时间轴 / Incident timeline】")
+	fmt.Fprintln(w, "  (同一时刻的多链路异常已合并为一“起”，避免虚增)")
+	if len(a.Incidents) == 0 {
 		fmt.Fprintln(w, "  本次监控未捕获到达到阈值的异常事件。")
 	} else {
-		fmt.Fprintln(w, "  序号   开始时间        持续      类型       严重度   说明")
-		for i, e := range a.Events {
-			fmt.Fprintf(w, "  #%-4d %s  %6.2fs  %-9s %-8s %s\n",
-				i+1, e.Start.Format("15:04:05"), e.Duration().Seconds(), e.Kind.Label(), e.Severity, e.Reason)
+		fmt.Fprintln(w, "  序号   开始时间        持续      涉及链路              严重度  原始  说明")
+		for i, in := range a.Incidents {
+			fmt.Fprintf(w, "  #%-4d %s  %6.2fs  %-20s %-8s %-4d  %s\n",
+				i+1, in.Start.Format("15:04:05"), in.Duration().Seconds(),
+				analyze.KindsLabel(in.Kinds), in.Severity, len(in.Events), analyze.IncidentReason(in))
 		}
 	}
 	fmt.Fprintln(w)

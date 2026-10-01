@@ -41,6 +41,7 @@ type htmlData struct {
 	Loss      int          `json:"loss"`
 	LossPct   float64      `json:"loss_pct"`
 	Holes     int          `json:"holes"`
+	Incidents int          `json:"incidents"`
 	HoleDurS  float64      `json:"hole_dur_s"`
 	Series    []htmlSeries `json:"series"`
 	Events    []htmlEvent  `json:"events"`
@@ -78,6 +79,7 @@ func buildHTMLData(a *analyze.Analysis) htmlData {
 		DurationS: a.Duration.Seconds(),
 		Total:     a.TotalSamples,
 		Holes:     len(a.Events),
+		Incidents: len(a.Incidents),
 		HoleDurS:  a.HoleDuration.Seconds(),
 		Hints:     analyze.Hints(a),
 	}
@@ -173,7 +175,7 @@ func summaryString(a *analyze.Analysis) string {
 	}
 	card("监控时长 Duration", a.Duration.Round(time.Second).String(), a.Start.Format("01-02 15:04")+" ~ "+a.End.Format("01-02 15:04"))
 	card("采样 Samples", itoa(a.TotalSamples), "三条链路并行")
-	card("网洞 Holes", itoa(len(a.Events)), "累计 "+a.HoleDuration.Round(time.Second).String())
+	card("网洞 Holes", itoa(len(a.Incidents)), "合并自 "+itoa(len(a.Events))+" 条 · 累计 "+a.HoleDuration.Round(time.Second).String())
 	card("异常占比 Bad", percent(a), "丢包+超时")
 	sb.WriteString("</div>")
 	return sb.String()

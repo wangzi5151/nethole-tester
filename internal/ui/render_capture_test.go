@@ -54,14 +54,14 @@ func TestRenderCapture(t *testing.T) {
 	}
 
 	ev := model.HoleEvent{
-		ID: 1, Start: t0.Add(19 * time.Second), End: t0.Add(35*time.Second),
+		ID: 1, Start: t0.Add(19 * time.Second), End: t0.Add(35 * time.Second),
 		Kind: model.KindICMP, Severity: model.SevWarn, Reason: "latency spike 480ms on 223.5.5.5 (baseline 32ms)",
 	}
 	m.apply(Frame{
-		Sample:    model.Sample{Time: ev.End, Kind: model.KindICMP, Target: "223.5.5.5", OK: true, RTTms: 33},
-		Update:    detect.Update{Event: ev, Started: true},
-		Activity:  true,
-		Total:     160, LossCount: 3,
+		Sample:   model.Sample{Time: ev.End, Kind: model.KindICMP, Target: "223.5.5.5", OK: true, RTTms: 33},
+		Update:   detect.Update{Event: ev, Started: true},
+		Activity: true,
+		Total:    160, LossCount: 3,
 		HoleCount: 1, Elapsed: 35 * time.Second,
 	})
 	m.apply(Frame{

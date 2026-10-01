@@ -2,6 +2,7 @@ package analyze
 
 import (
 	"bytes"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -54,6 +55,52 @@ func TestLossBarsShortInput(t *testing.T) {
 	got := LossBars(ss, 56)
 	if len([]rune(got)) != 3 {
 		t.Fatalf("short loss bar length = %d, want 3", len([]rune(got)))
+	}
+}
+
+func TestIncidentsMergeOverlapping(t *testing.T) {
+	base := time.Now()
+	mk := func(kind model.Kind, off int) model.HoleEvent {
+		return model.HoleEvent{
+			RunID: "r", ID: int64(off + 1), Kind: kind, Target: string(kind),
+			Start: base.Add(time.Duration(off) * time.Second),
+			End:   base.Add(time.Duration(off+1) * time.Second),
+		}
+	}
+	// Three chains firing around the same instant -> one incident.
+	same := []model.HoleEvent{mk(model.KindICMP, 0), mk(model.KindTCP, 0), mk(model.KindDNS, 1)}
+	if got := Incidents(same, time.Second); len(got) != 1 {
+		t.Fatalf("overlapping events -> %d incidents, want 1", len(got))
+	} else if len(got[0].Kinds) != 3 {
+		t.Fatalf("incident merged %d kinds, want 3", len(got[0].Kinds))
+	}
+	// Widely separated events -> two incidents.
+	sep := []model.HoleEvent{mk(model.KindICMP, 0), mk(model.KindICMP, 30)}
+	if got := Incidents(sep, time.Second); len(got) != 2 {
+		t.Fatalf("separated events -> %d incidents, want 2", len(got))
+	}
+}
+
+func TestLoadEventsDedupesCheckpoints(t *testing.T) {
+	dir := t.TempDir()
+	path := dir + "/events.jsonl"
+	// Same (run,id) written three times as a live event is checkpointed.
+	lines := `{"run":"r","id":1,"kind":"icmp","start":"2026-01-01T00:00:00Z","end":"2026-01-01T00:00:00Z","samples":1,"loss_count":1}
+{"run":"r","id":1,"kind":"icmp","start":"2026-01-01T00:00:00Z","end":"2026-01-01T00:00:03Z","samples":4,"loss_count":4}
+{"run":"r","id":1,"kind":"icmp","start":"2026-01-01T00:00:00Z","end":"2026-01-01T00:00:05Z","samples":6,"loss_count":6}
+`
+	if err := os.WriteFile(path, []byte(lines), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	evs, err := LoadEvents(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(evs) != 1 {
+		t.Fatalf("got %d events, want 1 (deduped)", len(evs))
+	}
+	if evs[0].Samples != 6 || evs[0].LossCount != 6 {
+		t.Fatalf("dedupe kept wrong record: %+v", evs[0])
 	}
 }
 

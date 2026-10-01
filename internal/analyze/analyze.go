@@ -5,9 +5,11 @@ package analyze
 import (
 	"bufio"
 	"encoding/json"
+	"fmt"
 	"math"
 	"os"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/wangzi5151/nethole-tester/internal/model"
@@ -39,6 +41,8 @@ type Analysis struct {
 	TotalSamples int
 	Kinds        map[model.Kind]*KindStats
 	Events       []model.HoleEvent
+	// Incidents merges overlapping events across chains into real outages.
+	Incidents    []Incident
 	HoleDuration time.Duration
 	// Samples keeps the ordered stream so charts can show loss over time.
 	Samples []model.Sample
@@ -83,7 +87,10 @@ func LoadEvents(path string) ([]model.HoleEvent, error) {
 	}
 	defer f.Close()
 
-	var out []model.HoleEvent
+	var (
+		out   []model.HoleEvent
+		index = map[string]int{} // run#id -> position, for checkpoint de-dup
+	)
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	for sc.Scan() {
@@ -95,9 +102,127 @@ func LoadEvents(path string) ([]model.HoleEvent, error) {
 		if err := json.Unmarshal(line, &e); err != nil {
 			continue
 		}
+		// A live event is written on start and then checkpointed, so the same
+		// (run,id) can appear several times. Keep the most complete record.
+		key := fmt.Sprintf("%s#%d", e.RunID, e.ID)
+		if idx, ok := index[key]; ok {
+			if e.End.After(out[idx].End) {
+				out[idx].End = e.End
+			}
+			if e.Samples > out[idx].Samples {
+				out[idx].Samples = e.Samples
+			}
+			if e.LossCount > out[idx].LossCount {
+				out[idx].LossCount = e.LossCount
+			}
+			if e.MaxRTTms > out[idx].MaxRTTms {
+				out[idx].MaxRTTms = e.MaxRTTms
+			}
+			if out[idx].Snapshot == nil && e.Snapshot != nil {
+				out[idx].Snapshot = e.Snapshot
+			}
+			continue
+		}
+		index[key] = len(out)
 		out = append(out, e)
 	}
 	return out, sc.Err()
+}
+
+// Incident groups hole events that overlap in time (across probe chains and
+// targets) into a single real-world outage, so one disconnect does not inflate
+// the report with three near-identical rows.
+type Incident struct {
+	Start    time.Time
+	End      time.Time
+	Kinds    []model.Kind
+	Targets  []string
+	Severity model.Severity
+	Events   []model.HoleEvent
+}
+
+// Duration returns the incident span.
+func (in Incident) Duration() time.Duration { return in.End.Sub(in.Start) }
+
+// KindsLabel renders a compact "ICMP-Ping+TCP-SYN" label for a kind set.
+func KindsLabel(kinds []model.Kind) string {
+	parts := make([]string, 0, len(kinds))
+	for _, k := range kinds {
+		parts = append(parts, k.Label())
+	}
+	return strings.Join(parts, "+")
+}
+
+// Incidents clusters events whose gaps are no larger than gap.
+func Incidents(events []model.HoleEvent, gap time.Duration) []Incident {
+	sorted := append([]model.HoleEvent(nil), events...)
+	sort.SliceStable(sorted, func(i, j int) bool { return sorted[i].Start.Before(sorted[j].Start) })
+
+	var out []Incident
+	for _, e := range sorted {
+		if n := len(out); n > 0 && !e.Start.After(out[n-1].End.Add(gap)) {
+			in := &out[n-1]
+			if e.End.After(in.End) {
+				in.End = e.End
+			}
+			in.Kinds = appendKind(in.Kinds, e.Kind)
+			in.Targets = appendUnique(in.Targets, e.Target)
+			in.Events = append(in.Events, e)
+			if sevRank(e.Severity) > sevRank(in.Severity) {
+				in.Severity = e.Severity
+			}
+			continue
+		}
+		out = append(out, Incident{
+			Start:    e.Start,
+			End:      e.End,
+			Kinds:    []model.Kind{e.Kind},
+			Targets:  nonEmpty(e.Target),
+			Severity: e.Severity,
+			Events:   []model.HoleEvent{e},
+		})
+	}
+	return out
+}
+
+func appendKind(xs []model.Kind, k model.Kind) []model.Kind {
+	for _, v := range xs {
+		if v == k {
+			return xs
+		}
+	}
+	return append(xs, k)
+}
+
+func appendUnique(xs []string, s string) []string {
+	if s == "" {
+		return xs
+	}
+	for _, v := range xs {
+		if v == s {
+			return xs
+		}
+	}
+	return append(xs, s)
+}
+
+func nonEmpty(s string) []string {
+	if s == "" {
+		return nil
+	}
+	return []string{s}
+}
+
+func sevRank(s model.Severity) int {
+	switch s {
+	case model.SevCritical:
+		return 3
+	case model.SevWarn:
+		return 2
+	case model.SevInfo:
+		return 1
+	}
+	return 0
 }
 
 // Analyze computes statistics from samples and events.
@@ -137,8 +262,11 @@ func Analyze(samples []model.Sample, events []model.HoleEvent) *Analysis {
 	for _, ks := range a.Kinds {
 		ks.finalize()
 	}
-	for _, e := range events {
-		a.HoleDuration += e.Duration()
+	// Cluster overlapping events so three chains firing at once count as one
+	// outage, and report downtime from the merged spans (no double counting).
+	a.Incidents = Incidents(events, 3*time.Second)
+	for _, in := range a.Incidents {
+		a.HoleDuration += in.Duration()
 	}
 	return a
 }

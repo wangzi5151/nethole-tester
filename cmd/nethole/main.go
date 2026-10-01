@@ -7,6 +7,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"flag"
 	"fmt"
@@ -14,6 +15,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -117,8 +119,8 @@ func quickMode() error {
 	fmt.Println()
 	fmt.Print("  输入数字后回车 (直接回车 = 1): ")
 
-	var line string
-	fmt.Scanln(&line)
+	// Read a whole line so EOF / empty input / piped stdin all behave sanely.
+	line, _ := bufio.NewReader(os.Stdin).ReadString('\n')
 	line = strings.TrimSpace(line)
 	if line == "" {
 		line = "1"
@@ -280,78 +282,149 @@ func execute(cfg config.Config) error {
 	return finish(cfg)
 }
 
+// liveEvent tracks an event that is currently open.
+type liveEvent struct {
+	ev   model.HoleEvent
+	snap chan *model.Snapshot
+}
+
+// snapshotWait bounds how long an event writer waits for its evidence snapshot.
+const snapshotWait = 6 * time.Second
+
 // runEngine is the single consumer of the probe stream. It persists every
 // sample, feeds the detector, fires evidence snapshots and mirrors status to
 // the UI without ever blocking the probers.
+//
+// Durability: an event is written to disk the moment it starts and then
+// checkpointed periodically, so a `kill -9`, power loss or a blackhole that
+// lasts until shutdown still leaves a recoverable record.
 func runEngine(ctx context.Context, cfg config.Config, runner *probe.Runner, store *storage.Store,
 	det *detect.Detector, frames chan<- ui.Frame, start time.Time) {
 
+	runID := start.UTC().Format("20060102T150405")
 	var (
 		total, loss, holes int
-		active             = map[int64]chan *model.Snapshot{}
+		active             = map[int64]*liveEvent{}
 		snapSem            = make(chan struct{}, 2) // limit concurrent traceroutes
+		wg                 sync.WaitGroup
+		samples            = runner.Samples()
+		checkpoint         = time.NewTicker(5 * time.Second)
 	)
+	defer checkpoint.Stop()
 
-	for s := range runner.Samples() {
-		total++
-		if !s.OK {
-			loss++
-		}
-		if err := store.WriteSample(s); err != nil {
-			fmt.Fprintln(os.Stderr, "warn: write sample:", err)
-		}
-
-		upd, ok := det.Observe(s)
-		frame := ui.Frame{Sample: s, Total: total, LossCount: loss, HoleCount: holes, Elapsed: time.Since(start)}
-
-		if ok && upd.Event.ID != 0 {
-			frame.Update = upd
-			if upd.Started {
-				holes++
-				frame.HoleCount = holes
-				frame.Activity = true
-				ch := make(chan *model.Snapshot, 1)
-				active[upd.Event.ID] = ch
-				go captureAsync(ctx, cfg, snapSem, ch)
-			} else if upd.Ended {
-				frame.Activity = true
-				var snap *model.Snapshot
-				if ch := active[upd.Event.ID]; ch != nil {
-					select {
-					case snap = <-ch:
-					case <-time.After(2500 * time.Millisecond):
-					}
-					delete(active, upd.Event.ID)
+	// persist writes an event after waiting (asynchronously) for its snapshot,
+	// so the probe stream is never stalled by a slow traceroute.
+	persist := func(ev model.HoleEvent, ch chan *model.Snapshot) {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if ch != nil {
+				select {
+				case ev.Snapshot = <-ch:
+				case <-time.After(snapshotWait):
 				}
-				ev := upd.Event
-				ev.Snapshot = snap
-				if err := store.WriteEvent(ev); err != nil {
-					fmt.Fprintln(os.Stderr, "warn: write event:", err)
-				}
-				frame.Update.Event = ev
+			}
+			ev.RunID = runID
+			if err := store.WriteEvent(ev); err != nil {
+				fmt.Fprintln(os.Stderr, "warn: write event:", err)
+			}
+		}()
+	}
+
+	writeCheckpoints := func() {
+		for _, le := range active {
+			ev := le.ev
+			ev.RunID = runID
+			if err := store.WriteEvent(ev); err != nil {
+				fmt.Fprintln(os.Stderr, "warn: checkpoint event:", err)
 			}
 		}
+	}
 
+loop:
+	for {
 		select {
-		case frames <- frame:
-		default: // UI slower than probes: drop the display frame, never the data
+		case <-ctx.Done():
+			break loop
+		case <-checkpoint.C:
+			writeCheckpoints()
+		case s, ok := <-samples:
+			if !ok {
+				break loop
+			}
+			total++
+			if !s.OK {
+				loss++
+			}
+			if err := store.WriteSample(s); err != nil {
+				fmt.Fprintln(os.Stderr, "warn: write sample:", err)
+			}
+
+			upd, has := det.Observe(s)
+			frame := ui.Frame{Sample: s, Total: total, LossCount: loss, HoleCount: holes, Elapsed: time.Since(start)}
+
+			if has && upd.Event.ID != 0 {
+				frame.Update = upd
+				switch {
+				case upd.Started:
+					holes++
+					frame.HoleCount = holes
+					frame.Activity = true
+					ch := make(chan *model.Snapshot, 1)
+					active[upd.Event.ID] = &liveEvent{ev: upd.Event, snap: ch}
+					go captureAsync(ctx, cfg, snapSem, ch)
+					// Durable from the very first instant.
+					ev := upd.Event
+					ev.RunID = runID
+					if err := store.WriteEvent(ev); err != nil {
+						fmt.Fprintln(os.Stderr, "warn: write event:", err)
+					}
+				case upd.Ended:
+					frame.Activity = true
+					le := active[upd.Event.ID]
+					delete(active, upd.Event.ID)
+					ev := upd.Event
+					if le != nil {
+						persist(ev, le.snap)
+					} else {
+						persist(ev, nil)
+					}
+					frame.Update.Event = ev
+				default:
+					// Progress update: refresh the in-memory record used by
+					// checkpoints.
+					if le := active[upd.Event.ID]; le != nil {
+						le.ev = upd.Event
+					}
+				}
+			}
+
+			if frame.Activity {
+				// Never drop a transition, even if the UI is behind.
+				select {
+				case frames <- frame:
+				case <-ctx.Done():
+					break loop
+				}
+			} else {
+				select {
+				case frames <- frame:
+				default: // UI slower than probes: drop the display frame, never the data
+				}
+			}
 		}
 	}
 
-	// The stream has ended; persist any hole that was still open so a blackhole
-	// lasting until shutdown is not silently lost.
+	// Persist any event still open at shutdown.
 	for _, ev := range det.Flush() {
-		if ch := active[ev.ID]; ch != nil {
-			select {
-			case ev.Snapshot = <-ch:
-			case <-time.After(2500 * time.Millisecond):
-			}
+		if le := active[ev.ID]; le != nil {
+			persist(ev, le.snap)
 			delete(active, ev.ID)
-		}
-		if err := store.WriteEvent(ev); err != nil {
-			fmt.Fprintln(os.Stderr, "warn: write event:", err)
+		} else {
+			persist(ev, nil)
 		}
 	}
+	wg.Wait()
 }
 
 func captureAsync(ctx context.Context, cfg config.Config, sem chan struct{}, ch chan *model.Snapshot) {

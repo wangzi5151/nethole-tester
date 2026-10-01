@@ -13,7 +13,7 @@ import (
 // directly (bypassing any system cache) and records the answers or errors.
 func dnsCheck(ctx context.Context, cfg config.Config) map[string]string {
 	out := map[string]string{}
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 2500*time.Millisecond)
 	defer cancel()
 
 	servers := cfg.DNSServers
@@ -25,7 +25,7 @@ func dnsCheck(ctx context.Context, cfg config.Config) map[string]string {
 		r := &net.Resolver{
 			PreferGo: true,
 			Dial: func(ctx context.Context, network, _ string) (net.Conn, error) {
-				d := net.Dialer{Timeout: 3 * time.Second}
+				d := net.Dialer{Timeout: 1500 * time.Millisecond}
 				return d.DialContext(ctx, "udp", server)
 			},
 		}

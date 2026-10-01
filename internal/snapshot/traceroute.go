@@ -17,7 +17,7 @@ func traceroute(ctx context.Context, cfg config.Config) (string, string) {
 	if len(cfg.ICMPTargets) > 0 {
 		target = cfg.ICMPTargets[0]
 	}
-	ctx, cancel := context.WithTimeout(ctx, 12*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 7*time.Second)
 	defer cancel()
 
 	type candidate struct {

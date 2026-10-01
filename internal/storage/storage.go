@@ -81,16 +81,19 @@ func (r *Rotator) WriteLine(b []byte) error {
 	return nil
 }
 
-// rotate shifts path -> path.1 -> ... and drops the oldest file.
+// rotate drops the oldest file, shifts path.(i) -> path.(i+1), then moves the
+// active file to path.1. The oldest must be removed BEFORE shifting, otherwise
+// the shift would overwrite it with a file we want to keep.
 func (r *Rotator) rotate() error {
 	_ = r.w.Flush()
 	_ = r.file.Close()
+
+	_ = os.Remove(fmt.Sprintf("%s.%d", r.path, r.maxFiles))
 	for i := r.maxFiles - 1; i >= 1; i-- {
 		src := fmt.Sprintf("%s.%d", r.path, i)
 		dst := fmt.Sprintf("%s.%d", r.path, i+1)
 		_ = os.Rename(src, dst)
 	}
-	_ = os.Remove(fmt.Sprintf("%s.%d", r.path, r.maxFiles))
 	if err := os.Rename(r.path, r.path+".1"); err != nil && !os.IsNotExist(err) {
 		return err
 	}

@@ -71,11 +71,16 @@ const (
 
 // HoleEvent is a detected "network hole": an interval where the connection was
 // up but behaving badly (latency spike, packet loss burst, or TCP blackhole).
+//
+// RunID scopes the otherwise per-process ID so a log file appended across many
+// runs can be de-duplicated unambiguously.
 type HoleEvent struct {
+	RunID     string    `json:"run,omitempty"`
 	ID        int64     `json:"id"`
 	Start     time.Time `json:"start"`
 	End       time.Time `json:"end"`
 	Kind      Kind      `json:"kind"`
+	Target    string    `json:"target,omitempty"`
 	Reason    string    `json:"reason"`
 	Severity  Severity  `json:"severity"`
 	Samples   int       `json:"samples"`

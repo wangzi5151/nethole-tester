@@ -131,7 +131,7 @@ func RenderText(w io.Writer, a *Analysis) {
 	}
 	fmt.Fprintf(w, " 持续 Duration : %s\n", a.Duration.Round(time.Millisecond))
 	fmt.Fprintf(w, " 样本 Samples  : %d\n", a.TotalSamples)
-	fmt.Fprintf(w, " 网洞 Holes    : %d  (累计 %s)\n", len(a.Events), a.HoleDuration.Round(time.Millisecond))
+	fmt.Fprintf(w, " 网洞 Holes    : %d 起 / 原始 %d 条  (累计 %s)\n", len(a.Incidents), len(a.Events), a.HoleDuration.Round(time.Millisecond))
 	fmt.Fprintln(w)
 
 	for _, k := range SortedKinds(a.Kinds) {
@@ -149,19 +149,33 @@ func RenderText(w io.Writer, a *Analysis) {
 		fmt.Fprintln(w)
 	}
 
-	if len(a.Events) > 0 {
-		fmt.Fprintln(w, "-- 网洞事件 / Hole events -------------------------------")
-		for i, e := range a.Events {
-			fmt.Fprintf(w, "  #%-3d %s  %-8s %-8s %6.2fs  %s\n",
+	if len(a.Incidents) > 0 {
+		fmt.Fprintf(w, "-- 网洞事件 / Incidents (merged) — %d 起 / 原始 %d 条 ---------\n", len(a.Incidents), len(a.Events))
+		for i, in := range a.Incidents {
+			fmt.Fprintf(w, "  #%-3d %s  %6.2fs  %-18s %-8s  %s\n",
 				i+1,
-				e.Start.Format("15:04:05"),
-				e.Kind.Label(),
-				e.Severity,
-				e.Duration().Seconds(),
-				e.Reason)
+				in.Start.Format("15:04:05"),
+				in.Duration().Seconds(),
+				KindsLabel(in.Kinds),
+				in.Severity,
+				IncidentReason(in))
 		}
 		fmt.Fprintln(w)
 	}
+}
+
+// IncidentReason summarises an incident in one line.
+func IncidentReason(in Incident) string {
+	if len(in.Events) == 1 {
+		return in.Events[0].Reason
+	}
+	best := in.Events[0]
+	for _, e := range in.Events {
+		if sevRank(e.Severity) > sevRank(best.Severity) {
+			best = e
+		}
+	}
+	return fmt.Sprintf("%d 条异常合并 / %d events merged: %s", len(in.Events), len(in.Events), best.Reason)
 }
 
 func samplesOfKind(a *Analysis, k model.Kind) []model.Sample {
