@@ -1,5 +1,9 @@
 name: Release
 
+# Automated version of the manual flow: `make dist` + upload.
+# On every tag push (v*), build the same bare binaries the README's
+# install one-liners expect (nethole-<os>-<arch>[.exe], no archives,
+# no version in the filename) and attach them to a GitHub release.
 on:
   push:
     tags:
@@ -9,7 +13,7 @@ permissions:
   contents: write
 
 jobs:
-  goreleaser:
+  release:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -19,11 +23,16 @@ jobs:
         with:
           go-version: "1.23"
           cache: true
-      - name: Run GoReleaser
-        uses: goreleaser/goreleaser-action@v6
+      - name: Build release artifacts (make dist)
+        run: make dist
+      - name: Create GitHub release and upload artifacts
+        uses: softprops/action-gh-release@v2
         with:
-          distribution: goreleaser
-          version: latest
-          args: release --clean
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          files: dist/*
+          generate_release_notes: true
+          body: |
+            ## 安装 / Install
+            下载对应平台的文件，`chmod +x` 后直接运行，无需任何运行时依赖。
+            Download the file for your platform, `chmod +x`, run. No runtime required.
+
+            > 零遥测、零上传。The only traffic is the probes you configure.
