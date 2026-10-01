@@ -39,7 +39,11 @@ type Model struct {
 
 	rtts   map[model.Kind][]float64
 	losses map[model.Kind][]bool
-	last   map[string]model.Sample
+	// refused tracks TCP "connection refused" per chain in lockstep with
+	// losses: the host is up but the port is closed, so it renders as ×
+	// (neutral), never as a loss block.
+	refused map[model.Kind][]bool
+	last    map[string]model.Sample
 
 	total, loss, holes int
 	events             []model.HoleEvent
@@ -50,12 +54,13 @@ type Model struct {
 // New creates the dashboard model. frames must be closed when the run ends.
 func New(cfg config.Config, frames <-chan Frame) Model {
 	return Model{
-		cfg:    cfg,
-		start:  time.Now(),
-		frames: frames,
-		rtts:   map[model.Kind][]float64{},
-		losses: map[model.Kind][]bool{},
-		last:   map[string]model.Sample{},
+		cfg:     cfg,
+		start:   time.Now(),
+		frames:  frames,
+		rtts:    map[model.Kind][]float64{},
+		losses:  map[model.Kind][]bool{},
+		refused: map[model.Kind][]bool{},
+		last:    map[string]model.Sample{},
 	}
 }
 
@@ -108,6 +113,7 @@ func (m *Model) apply(f Frame) {
 	s := f.Sample
 	m.last[string(s.Kind)+"|"+s.Target] = s
 	m.losses[s.Kind] = appendCappedBool(m.losses[s.Kind], !s.OK, ringSize)
+	m.refused[s.Kind] = appendCappedBool(m.refused[s.Kind], s.ConnRefused, ringSize)
 	if s.OK {
 		m.rtts[s.Kind] = appendCappedFloat(m.rtts[s.Kind], s.RTTms, ringSize)
 	}
@@ -152,7 +158,7 @@ func (m Model) View() string {
 
 	for _, k := range m.cfg.Kinds() {
 		spark := analyze.Sparkline(m.rtts[k], 40)
-		lossStrip := lossStrip(m.losses[k], 40)
+		lossStrip := lossStrip(m.losses[k], m.refused[k], 40)
 		lastTxt := "waiting…"
 		if s, ok := m.lastSample(k); ok {
 			switch {
@@ -202,18 +208,24 @@ func (m Model) lastSample(k model.Kind) (model.Sample, bool) {
 	return best, found
 }
 
-func lossStrip(xs []bool, width int) string {
-	if len(xs) == 0 {
+// lossStrip renders the recent per-sample history: █ lost, × refused
+// (host reachable, port closed — neutral, not packet loss), · ok.
+func lossStrip(lost, refused []bool, width int) string {
+	if len(lost) == 0 {
 		return ""
 	}
-	if len(xs) > width {
-		xs = xs[len(xs)-width:]
+	if len(lost) > width {
+		lost = lost[len(lost)-width:]
+		refused = refused[len(refused)-width:]
 	}
 	var b strings.Builder
-	for _, lost := range xs {
-		if lost {
+	for i, l := range lost {
+		switch {
+		case i < len(refused) && refused[i]:
+			b.WriteRune('×')
+		case l:
 			b.WriteRune('█')
-		} else {
+		default:
 			b.WriteRune('·')
 		}
 	}

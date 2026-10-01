@@ -31,6 +31,15 @@ func TestHTMLIsOfflineAndSelfContained(t *testing.T) {
 	}
 }
 
+func TestPercentZeroNotBlank(t *testing.T) {
+	a := analyze.Analyze([]model.Sample{
+		{Kind: model.KindICMP, Target: "1.1.1.1", OK: true, RTTms: 5},
+	}, nil)
+	if got := percent(a); got != "0%" {
+		t.Fatalf("percent with no loss = %q, want %q", got, "0%")
+	}
+}
+
 func TestComplaintContainsEvidence(t *testing.T) {
 	a := analyze.Analyze([]model.Sample{
 		{Kind: model.KindICMP, Target: "1.1.1.1", OK: false},

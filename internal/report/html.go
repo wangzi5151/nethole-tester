@@ -3,6 +3,7 @@ package report
 import (
 	"encoding/json"
 	"io"
+	"strconv"
 	"strings"
 	"time"
 
@@ -112,7 +113,9 @@ func buildHTMLData(a *analyze.Analysis) htmlData {
 func downsample(a *analyze.Analysis, k model.Kind) []htmlPoint {
 	var raw []model.Sample
 	for _, s := range a.Samples {
-		if s.Kind == k {
+		// Refused connections carry no network signal (host up, port closed):
+		// drop them so they neither render as loss gaps nor dilute buckets.
+		if s.Kind == k && !s.ConnRefused {
 			raw = append(raw, s)
 		}
 	}
@@ -182,14 +185,26 @@ func summaryString(a *analyze.Analysis) string {
 }
 
 func percent(a *analyze.Analysis) string {
-	if a.TotalSamples == 0 {
-		return "0%"
-	}
-	bad := 0
+	// Loss is measured only over probes that actually reached the network,
+	// mirroring KindStats.LossPct (refused connections are a target config
+	// issue, not packet loss).
+	ok, bad := 0, 0
 	for _, ks := range a.Kinds {
+		ok += ks.OK
 		bad += ks.Loss
 	}
-	return strings.TrimRight(strings.TrimRight(fmtFloat(float64(bad)/float64(a.TotalSamples)*100), "0"), ".") + "%"
+	if ok+bad == 0 {
+		return "0%"
+	}
+	s := strconv.FormatFloat(float64(bad)/float64(ok+bad)*100, 'f', 2, 64)
+	// Trim trailing zeros of the fraction only; a bare integer like "0" must
+	// stay "0" (naive TrimRight would turn it into an empty string).
+	s = strings.TrimRight(s, "0")
+	s = strings.TrimRight(s, ".")
+	if s == "" {
+		s = "0"
+	}
+	return s + "%"
 }
 
 func itoa(n int) string {
@@ -212,14 +227,4 @@ func itoa(n int) string {
 		b[i] = '-'
 	}
 	return string(b[i:])
-}
-
-func fmtFloat(f float64) string {
-	return strings.TrimRight(strings.TrimRight(
-		jsonNumber(f), "0"), ".")
-}
-
-func jsonNumber(f float64) string {
-	b, _ := json.Marshal(f)
-	return string(b)
 }
