@@ -234,6 +234,9 @@ func execute(cfg config.Config) error {
 	if err != nil {
 		return err
 	}
+	for _, w := range runner.Warnings() {
+		fmt.Fprintln(os.Stderr, "warn:", w)
+	}
 	store, err := storage.New(cfg.SamplesOut, cfg.EventsOut, cfg.MaxLogMB, cfg.MaxLogFiles)
 	if err != nil {
 		return err
@@ -360,10 +363,10 @@ loop:
 				fmt.Fprintln(os.Stderr, "warn: write sample:", err)
 			}
 
-			upd, has := det.Observe(s)
+			upd := det.Observe(s)
 			frame := ui.Frame{Sample: s, Total: total, LossCount: loss, HoleCount: holes, Elapsed: time.Since(start)}
 
-			if has && upd.Event.ID != 0 {
+			if upd.Event.ID != 0 {
 				frame.Update = upd
 				switch {
 				case upd.Started:
@@ -443,8 +446,17 @@ func captureAsync(ctx context.Context, cfg config.Config, sem chan struct{}, ch 
 
 // finish loads what was logged and writes text/html/csv + a complaint report.
 func finish(cfg config.Config) error {
-	samples, _ := analyze.LoadSamples(cfg.SamplesOut)
-	events, _ := analyze.LoadEvents(cfg.EventsOut)
+	samples, err := analyze.LoadSamples(cfg.SamplesOut)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "warn: cannot read samples log:", err)
+	}
+	events, err := analyze.LoadEvents(cfg.EventsOut)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "warn: cannot read events log:", err)
+	}
+	if len(samples) == 0 && len(events) == 0 {
+		return fmt.Errorf("no data found under %s (nothing was recorded during this run)", cfg.OutDir)
+	}
 	a := analyze.Analyze(samples, events)
 
 	fmt.Println()

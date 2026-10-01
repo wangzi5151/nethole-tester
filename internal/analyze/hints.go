@@ -58,6 +58,19 @@ func Hints(a *Analysis) []string {
 		hints = append(hints, fmt.Sprintf("网洞事件大约每 %s 出现一次，具有周期性：留意 Wi-Fi 漫游、DHCP 续租或同宿舍定时下载 (periodic pattern: roaming / DHCP renew / scheduled downloads).", iv.Round(time.Second)))
 	}
 
+	// 7. TCP targets refusing connections -> the host is reachable but the
+	// port is closed. This is a target configuration problem, not a network
+	// outage (the detector already excludes these from hole accounting).
+	var refused []string
+	for _, s := range a.Samples {
+		if s.Kind == model.KindTCP && s.ConnRefused && !contains(refused, s.Target) {
+			refused = append(refused, s.Target)
+		}
+	}
+	for _, t := range refused {
+		hints = append(hints, fmt.Sprintf("TCP %s 连接被拒绝 (connection refused)：目标主机可达但端口未开放，请检查目标配置；这不是网络丢包，不计入网洞统计 (port closed on target, not a network hole).", t))
+	}
+
 	if len(hints) == 0 {
 		hints = append(hints, "未发现明显相关性线索；若您确有卡顿体感，可延长监控时长并保留报告 (no strong correlation found; try a longer run).")
 	}

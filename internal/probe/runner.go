@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"math/rand"
+	"runtime"
+	"strings"
 	"sync"
 	"time"
 
@@ -17,19 +19,30 @@ import (
 type Runner struct {
 	cfg     config.Config
 	probers []Prober
+	warns   []string
 	out     chan model.Sample
 	wg      sync.WaitGroup
 }
 
-// NewRunner builds probers from a configuration. It returns an error only when a
-// chain cannot be initialised at all (e.g. no ICMP socket available) — a later,
-// transient probe failure is reported per-sample instead.
+// NewRunner builds probers from a configuration.
+//
+// An ICMP chain that cannot be initialised (e.g. on Windows without admin
+// rights, where neither raw nor unprivileged ICMP sockets exist) is skipped
+// with a warning instead of aborting the whole run — TCP and DNS chains still
+// produce useful evidence. Call Warnings to surface those notes to the user.
+// It returns an error only when no chain can be initialised at all.
 func NewRunner(cfg config.Config) (*Runner, error) {
 	var probers []Prober
+	var warns []string
 	for _, t := range cfg.ICMPTargets {
 		p, err := NewICMP(t)
 		if err != nil {
-			return nil, fmt.Errorf("icmp prober %s: %w", t, err)
+			hint := ""
+			if runtime.GOOS == "windows" {
+				hint = "; on Windows, ICMP probing requires Administrator — re-run elevated to enable it"
+			}
+			warns = append(warns, fmt.Sprintf("icmp prober %s unavailable (%v), continuing with TCP/DNS only%s", t, err, hint))
+			continue
 		}
 		probers = append(probers, p)
 	}
@@ -40,14 +53,22 @@ func NewRunner(cfg config.Config) (*Runner, error) {
 		probers = append(probers, NewDNS(s, cfg.DNSName))
 	}
 	if len(probers) == 0 {
+		if len(warns) > 0 {
+			return nil, fmt.Errorf("no probers could be initialised: %s", strings.Join(warns, "; "))
+		}
 		return nil, fmt.Errorf("no probers configured")
 	}
 	return &Runner{
 		cfg:     cfg,
 		probers: probers,
+		warns:   warns,
 		out:     make(chan model.Sample, 4096),
 	}, nil
 }
+
+// Warnings returns non-fatal notes collected while building probers
+// (e.g. a skipped ICMP chain). Print them so the user knows what is missing.
+func (r *Runner) Warnings() []string { return r.warns }
 
 // Samples returns the multiplexed sample stream. The channel is closed after
 // Run's context is cancelled and all probers have stopped.

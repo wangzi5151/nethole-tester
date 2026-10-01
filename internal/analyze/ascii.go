@@ -55,7 +55,7 @@ func LossBars(samples []model.Sample, width int) string {
 	if len(samples) <= width {
 		var b strings.Builder
 		for _, s := range samples {
-			if s.OK {
+			if s.OK || s.ConnRefused {
 				b.WriteRune(lossBlocks[0])
 			} else {
 				b.WriteRune(lossBlocks[len(lossBlocks)-1])
@@ -77,6 +77,9 @@ func LossBars(samples []model.Sample, width int) string {
 		}
 		lost, total := 0, 0
 		for _, s := range samples[lo:hi] {
+			if s.ConnRefused {
+				continue // neutral: host reachable, port closed
+			}
 			total++
 			if !s.OK {
 				lost++
@@ -141,7 +144,11 @@ func RenderText(w io.Writer, a *Analysis) {
 		if ks.LossPct > 5 {
 			lossColor = "  <-- 丢包偏高 / high loss"
 		}
-		fmt.Fprintf(w, "  包 Packets : %d ok / %d lost  (%.2f%% loss)%s\n", ks.OK, ks.Loss, ks.LossPct, lossColor)
+		refused := ""
+		if ks.Refused > 0 {
+			refused = fmt.Sprintf("  / %d refused(端口未开)", ks.Refused)
+		}
+		fmt.Fprintf(w, "  包 Packets : %d ok / %d lost%s  (%.2f%% loss)%s\n", ks.OK, ks.Loss, refused, ks.LossPct, lossColor)
 		fmt.Fprintf(w, "  延迟 RTT ms: min %.1f  avg %.1f  p50 %.1f  p95 %.1f  p99 %.1f  max %.1f  (jitter %.1f)\n",
 			ks.MinMs, ks.AvgMs, ks.P50Ms, ks.P95Ms, ks.P99Ms, ks.MaxMs, ks.JitterMs)
 		fmt.Fprintf(w, "  趋势 Trend : %s\n", Sparkline(ks.RTTs, 56))

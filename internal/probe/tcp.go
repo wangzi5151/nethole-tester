@@ -2,7 +2,10 @@ package probe
 
 import (
 	"context"
+	"errors"
 	"net"
+	"os"
+	"syscall"
 	"time"
 
 	"github.com/wangzi5151/nethole-tester/internal/model"
@@ -28,8 +31,30 @@ func (p *tcpProber) Probe(ctx context.Context) model.Sample {
 	conn, err := d.DialContext(ctx, "tcp", p.target)
 	rtt := time.Since(start)
 	if err != nil {
-		return model.NewSample(model.KindTCP, p.target, 0, err)
+		s := model.NewSample(model.KindTCP, p.target, 0, err)
+		// A refused connection means the host is up but the port is closed:
+		// flag it so the detector does not mistake a wrong target for a
+		// network outage. Errno comparison is locale-independent, unlike
+		// matching the (possibly localised) error string.
+		s.ConnRefused = isConnRefused(err)
+		return s
 	}
 	_ = conn.Close()
 	return model.NewSample(model.KindTCP, p.target, rtt, nil)
+}
+
+// isConnRefused reports whether err is an ECONNREFUSED from a dial.
+func isConnRefused(err error) bool {
+	var opErr *net.OpError
+	if !errors.As(err, &opErr) {
+		return false
+	}
+	var sysErr *os.SyscallError
+	if errors.As(opErr.Err, &sysErr) {
+		return sysErr.Err == syscall.ECONNREFUSED
+	}
+	if errno, ok := opErr.Err.(syscall.Errno); ok {
+		return errno == syscall.ECONNREFUSED
+	}
+	return false
 }

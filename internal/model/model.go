@@ -42,6 +42,11 @@ type Sample struct {
 	RTTms  float64       `json:"rtt_ms"`
 	OK     bool          `json:"ok"`
 	Err    string        `json:"err,omitempty"`
+	// ConnRefused marks a TCP dial rejected by the target (ECONNREFUSED):
+	// the host is reachable but the port is closed. This is a target
+	// configuration problem, not a network hole, so the detector ignores
+	// it for loss accounting (see analyze.Hints for the user-facing note).
+	ConnRefused bool `json:"conn_refused,omitempty"`
 }
 
 // NewSample builds a Sample from an RTT measurement.

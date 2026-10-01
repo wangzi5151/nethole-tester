@@ -53,13 +53,21 @@ func (d *Detector) state(s model.Sample) *state {
 }
 
 // Observe feeds one sample and reports whether a hole just started or ended.
-func (d *Detector) Observe(s model.Sample) (Update, bool) {
+func (d *Detector) Observe(s model.Sample) Update {
 	st := d.state(s)
 
-	if !s.OK {
-		return d.onFailure(st, s), true
+	if s.ConnRefused {
+		// A TCP "connection refused" means the host answered, so the network
+		// path works — the port is simply closed. It is deliberately neutral:
+		// it neither opens/extends a hole nor feeds the latency baseline, so
+		// a wrong target cannot masquerade as a network outage. The
+		// user-facing note is produced by analyze.Hints from stored samples.
+		return Update{}
 	}
-	return d.onSuccess(st, s), true
+	if !s.OK {
+		return d.onFailure(st, s)
+	}
+	return d.onSuccess(st, s)
 }
 
 func (d *Detector) onFailure(st *state, s model.Sample) Update {

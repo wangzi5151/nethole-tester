@@ -22,6 +22,7 @@ type KindStats struct {
 	Total    int
 	OK       int
 	Loss     int
+	Refused  int // TCP connection refused: host up, port closed (not loss)
 	LossPct  float64
 	MinMs    float64
 	AvgMs    float64
@@ -248,10 +249,14 @@ func Analyze(samples []model.Sample, events []model.HoleEvent) *Analysis {
 		if !contains(ks.Targets, s.Target) {
 			ks.Targets = append(ks.Targets, s.Target)
 		}
-		if s.OK {
+		switch {
+		case s.OK:
 			ks.OK++
 			ks.RTTs = append(ks.RTTs, s.RTTms)
-		} else {
+		case s.ConnRefused:
+			// Host is reachable, only the port is closed: not packet loss.
+			ks.Refused++
+		default:
 			ks.Loss++
 		}
 	}
@@ -272,8 +277,10 @@ func Analyze(samples []model.Sample, events []model.HoleEvent) *Analysis {
 }
 
 func (ks *KindStats) finalize() {
-	if ks.Total > 0 {
-		ks.LossPct = float64(ks.Loss) / float64(ks.Total) * 100
+	// Loss is measured only over probes that actually reached the network
+	// (refused connections are a target config issue, not packet loss).
+	if attempted := ks.OK + ks.Loss; attempted > 0 {
+		ks.LossPct = float64(ks.Loss) / float64(attempted) * 100
 	}
 	if len(ks.RTTs) == 0 {
 		return

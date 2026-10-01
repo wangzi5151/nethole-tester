@@ -155,9 +155,12 @@ func (m Model) View() string {
 		lossStrip := lossStrip(m.losses[k], 40)
 		lastTxt := "waiting…"
 		if s, ok := m.lastSample(k); ok {
-			if s.OK {
+			switch {
+			case s.OK:
 				lastTxt = fmt.Sprintf("%6.1fms", s.RTTms)
-			} else {
+			case s.ConnRefused:
+				lastTxt = bad.Render("  REFUSED")
+			default:
 				lastTxt = bad.Render("  TIMEOUT")
 			}
 		}

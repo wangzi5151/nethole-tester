@@ -58,6 +58,26 @@ func TestLossBarsShortInput(t *testing.T) {
 	}
 }
 
+func TestRefusedNotCountedAsLoss(t *testing.T) {
+	base := time.Now()
+	var ss []model.Sample
+	for i := 0; i < 5; i++ {
+		ss = append(ss, model.Sample{Time: base, Kind: model.KindTCP, Target: "h:1", OK: false, ConnRefused: true})
+	}
+	ss = append(ss, model.Sample{Time: base, Kind: model.KindTCP, Target: "h:1", OK: true, RTTms: 5})
+	a := Analyze(ss, nil)
+	ks := a.Kinds[model.KindTCP]
+	if ks.Refused != 5 {
+		t.Fatalf("Refused = %d, want 5", ks.Refused)
+	}
+	if ks.Loss != 0 {
+		t.Fatalf("Loss = %d, want 0 (refused is not loss)", ks.Loss)
+	}
+	if ks.LossPct != 0 {
+		t.Fatalf("LossPct = %v, want 0", ks.LossPct)
+	}
+}
+
 func TestIncidentsMergeOverlapping(t *testing.T) {
 	base := time.Now()
 	mk := func(kind model.Kind, off int) model.HoleEvent {

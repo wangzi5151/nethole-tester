@@ -166,6 +166,9 @@ Invoke-WebRequest -Uri https://github.com/wangzi5151/nethole-tester/releases/lat
 .\nethole.exe
 ```
 
+> ⚠️ **ICMP 探测在 Windows 上需要管理员权限**：Windows 既不支持原始套接字的非提权使用，也没有 Linux/macOS 那样的非特权 ICMP 通道。
+> 请右键 PowerShell →「以管理员身份运行」后再执行；若未提权，工具会自动降级为仅 TCP/DNS 链路并给出提示。
+
 ### 🐧 Linux (x86_64) / 🍎 macOS
 
 ```bash
@@ -420,6 +423,9 @@ A: 很多运营商对 ICMP 限速。工具会提示你这是「ICMP 被限速，
 
 **Q: Termux 上 Wi-Fi 信号读不到？**
 A: Android 权限限制，非 root 下经常读不到。工具会如实标注「不可用」，不影响其他功能。
+
+**Q: Windows 上一运行就报错退出？**
+A: ICMP 在 Windows 上必须管理员权限（系统限制，无解）。请以管理员身份运行 PowerShell；若未提权，工具会自动降级为 TCP/DNS 链路并提示，不再直接退出。
 
 **Q: 会不会太耗资源？**
 A: 默认每条链路 1 次/秒，树莓派预设 3 秒一次；探测为事件驱动、无忙轮询，实际占用很低（可用 `top` 自行确认）。我们不做未经验证的数字承诺。
