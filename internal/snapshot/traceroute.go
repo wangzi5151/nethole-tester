@@ -3,6 +3,7 @@ package snapshot
 import (
 	"context"
 	"os/exec"
+	"runtime"
 	"strings"
 	"time"
 
@@ -28,6 +29,13 @@ func traceroute(ctx context.Context, cfg config.Config) (string, string) {
 		{"mtr", []string{"-rwzc5", "-m", "12", target}},
 		{"traceroute", []string{"-n", "-m", "12", "-w", "1", target}},
 		{"tracepath", []string{"-n", "-m", "12", target}},
+	}
+	if runtime.GOOS == "windows" {
+		// Stock Windows ships neither mtr nor traceroute; tracert.exe is
+		// the native equivalent.
+		candidates = append([]candidate{
+			{"tracert", []string{"-d", "-w", "1000", "-h", "12", target}},
+		}, candidates...)
 	}
 	for _, c := range candidates {
 		path := findTool(c.bin)

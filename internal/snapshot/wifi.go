@@ -50,9 +50,17 @@ func wifiInfo(ctx context.Context) (string, string) {
 
 	switch runtime.GOOS {
 	case "darwin":
+		// airport is not on PATH on stock macOS; probe its well-known
+		// location before falling back to a PATH lookup.
+		bins := []string{"/System/Library/PrivateFrameworks/Apple80211.framework/Versions/Current/Resources/airport"}
 		if path := findTool("airport"); path != "" {
-			if out, err := exec.CommandContext(ctx, path, "-I").CombinedOutput(); err == nil {
-				return strings.TrimSpace(string(out)), "via airport -I"
+			bins = append(bins, path)
+		}
+		for _, bin := range bins {
+			if out, err := exec.CommandContext(ctx, bin, "-I").CombinedOutput(); err == nil {
+				if txt := strings.TrimSpace(string(out)); txt != "" {
+					return txt, "via airport -I"
+				}
 			}
 		}
 	case "windows":
