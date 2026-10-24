@@ -36,16 +36,16 @@ func WriteEventsCSV(w io.Writer, events []model.HoleEvent) error {
 	if _, err := bw.WriteString("\ufeff"); err != nil {
 		return err
 	}
-	if _, err := bw.WriteString("id,start,end,duration_s,kind,severity,loss_count,max_rtt_ms,reason\n"); err != nil {
+	if _, err := bw.WriteString("id,start,end,duration_s,kind,target,severity,loss_count,max_rtt_ms,reason\n"); err != nil {
 		return err
 	}
 	for _, e := range events {
-		line := fmt.Sprintf("%d,%s,%s,%.3f,%s,%s,%d,%.1f,%s\n",
+		line := fmt.Sprintf("%d,%s,%s,%.3f,%s,%s,%s,%d,%.1f,%s\n",
 			e.ID,
 			e.Start.Format("2006-01-02 15:04:05.000"),
 			e.End.Format("2006-01-02 15:04:05.000"),
 			e.Duration().Seconds(),
-			e.Kind, e.Severity, e.LossCount, e.MaxRTTms, csvField(e.Reason))
+			e.Kind, csvField(e.Target), e.Severity, e.LossCount, e.MaxRTTms, csvField(e.Reason))
 		if _, err := bw.WriteString(line); err != nil {
 			return err
 		}

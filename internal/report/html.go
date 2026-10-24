@@ -27,26 +27,46 @@ type htmlSeries struct {
 }
 
 type htmlEvent struct {
-	Start string  `json:"start"`
-	DurS  float64 `json:"dur_s"`
-	Kind  string  `json:"kind"`
-	Sev   string  `json:"sev"`
-	Why   string  `json:"why"`
+	Start  string  `json:"start"`
+	DurS   float64 `json:"dur_s"`
+	Kind   string  `json:"kind"`
+	Target string  `json:"target,omitempty"`
+	Sev    string  `json:"sev"`
+	Why    string  `json:"why"`
+}
+
+type htmlTarget struct {
+	Kind    string  `json:"kind"`
+	Target  string  `json:"target"`
+	Samples int     `json:"samples"`
+	Loss    int     `json:"loss"`
+	LossPct float64 `json:"loss_pct"`
+	AvgMs   float64 `json:"avg_ms"`
+	P95Ms   float64 `json:"p95_ms"`
+	MaxMs   float64 `json:"max_ms"`
 }
 
 type htmlData struct {
-	Generated string       `json:"generated"`
-	DurationS float64      `json:"duration_s"`
-	Total     int          `json:"total"`
-	OK        int          `json:"ok"`
-	Loss      int          `json:"loss"`
-	LossPct   float64      `json:"loss_pct"`
-	Holes     int          `json:"holes"`
-	Incidents int          `json:"incidents"`
-	HoleDurS  float64      `json:"hole_dur_s"`
-	Series    []htmlSeries `json:"series"`
-	Events    []htmlEvent  `json:"events"`
-	Hints     []string     `json:"hints"`
+	Generated       string       `json:"generated"`
+	DurationS       float64      `json:"duration_s"`
+	Total           int          `json:"total"`
+	OK              int          `json:"ok"`
+	Loss            int          `json:"loss"`
+	Refused         int          `json:"refused"`
+	LossPct         float64      `json:"loss_pct"`
+	AvailabilityPct float64      `json:"availability_pct"`
+	QualityScore    int          `json:"quality_score"`
+	Grade           string       `json:"grade"`
+	P95Ms           float64      `json:"p95_ms"`
+	JitterMs        float64      `json:"jitter_ms"`
+	Holes           int          `json:"holes"`
+	Incidents       int          `json:"incidents"`
+	HoleDurS        float64      `json:"hole_dur_s"`
+	Series          []htmlSeries `json:"series"`
+	Events          []htmlEvent  `json:"events"`
+	IncidentList    []htmlEvent  `json:"incident_list"`
+	Targets         []htmlTarget `json:"targets"`
+	Hints           []string     `json:"hints"`
 }
 
 var seriesColors = map[model.Kind]string{
@@ -76,20 +96,22 @@ func WriteHTML(w io.Writer, a *analyze.Analysis) error {
 
 func buildHTMLData(a *analyze.Analysis) htmlData {
 	d := htmlData{
-		Generated: time.Now().Format("2006-01-02 15:04:05"),
-		DurationS: a.Duration.Seconds(),
-		Total:     a.TotalSamples,
-		Holes:     len(a.Events),
-		Incidents: len(a.Incidents),
-		HoleDurS:  a.HoleDuration.Seconds(),
-		Hints:     analyze.Hints(a),
-	}
-	for _, ks := range a.Kinds {
-		d.OK += ks.OK
-		d.Loss += ks.Loss
-	}
-	if d.Total > 0 {
-		d.LossPct = float64(d.Loss) / float64(d.Total) * 100
+		Generated:       time.Now().Format("2006-01-02 15:04:05"),
+		DurationS:       a.Duration.Seconds(),
+		Total:           a.TotalSamples,
+		OK:              a.OK,
+		Loss:            a.Loss,
+		Refused:         a.Refused,
+		LossPct:         a.LossPct,
+		AvailabilityPct: a.AvailabilityPct,
+		QualityScore:    a.QualityScore,
+		Grade:           a.Grade,
+		P95Ms:           a.P95Ms,
+		JitterMs:        a.JitterMs,
+		Holes:           len(a.Events),
+		Incidents:       len(a.Incidents),
+		HoleDurS:        a.HoleDuration.Seconds(),
+		Hints:           analyze.Hints(a),
 	}
 	for _, k := range analyze.SortedKinds(a.Kinds) {
 		d.Series = append(d.Series, htmlSeries{
@@ -100,11 +122,34 @@ func buildHTMLData(a *analyze.Analysis) htmlData {
 	}
 	for _, e := range a.Events {
 		d.Events = append(d.Events, htmlEvent{
-			Start: e.Start.Format("2006-01-02 15:04:05"),
-			DurS:  e.Duration().Seconds(),
-			Kind:  e.Kind.Label(),
-			Sev:   string(e.Severity),
-			Why:   e.Reason,
+			Start:  e.Start.Format("2006-01-02 15:04:05"),
+			DurS:   e.Duration().Seconds(),
+			Kind:   e.Kind.Label(),
+			Target: e.Target,
+			Sev:    string(e.Severity),
+			Why:    e.Reason,
+		})
+	}
+	for _, in := range a.Incidents {
+		d.IncidentList = append(d.IncidentList, htmlEvent{
+			Start:  in.Start.Format("2006-01-02 15:04:05"),
+			DurS:   in.Duration().Seconds(),
+			Kind:   analyze.KindsLabel(in.Kinds),
+			Target: strings.Join(in.Targets, ", "),
+			Sev:    string(in.Severity),
+			Why:    analyze.IncidentReason(in),
+		})
+	}
+	for _, t := range a.Targets {
+		d.Targets = append(d.Targets, htmlTarget{
+			Kind:    t.Kind.Label(),
+			Target:  t.Target,
+			Samples: t.Total,
+			Loss:    t.Loss,
+			LossPct: t.LossPct,
+			AvgMs:   t.AvgMs,
+			P95Ms:   t.P95Ms,
+			MaxMs:   t.MaxMs,
 		})
 	}
 	return d
@@ -177,28 +222,32 @@ func summaryString(a *analyze.Analysis) string {
 		sb.WriteString("<div class='card'><div class='v'>" + value + "</div><div class='l'>" + label + "</div><div class='s'>" + sub + "</div></div>")
 	}
 	card("监控时长 Duration", a.Duration.Round(time.Second).String(), a.Start.Format("01-02 15:04")+" ~ "+a.End.Format("01-02 15:04"))
-	card("采样 Samples", itoa(a.TotalSamples), "三条链路并行")
+	card("采样 Samples", itoa(a.TotalSamples), "成功 "+itoa(a.OK)+" · 丢包 "+itoa(a.Loss))
+	quality := "综合质量评分 n/a"
+	if a.Grade != "n/a" {
+		quality = "综合质量评分 " + itoa(a.QualityScore) + "/100 (" + a.Grade + ")"
+	}
+	card("可用率 Availability", availabilityPercent(a), quality)
 	card("网洞 Holes", itoa(len(a.Incidents)), "合并自 "+itoa(len(a.Events))+" 条 · 累计 "+a.HoleDuration.Round(time.Second).String())
-	card("异常占比 Bad", percent(a), "丢包+超时")
 	sb.WriteString("</div>")
 	return sb.String()
 }
 
+// percent returns the share of attempted probes that failed (0% = no loss).
 func percent(a *analyze.Analysis) string {
-	// Loss is measured only over probes that actually reached the network,
-	// mirroring KindStats.LossPct (refused connections are a target config
-	// issue, not packet loss).
-	ok, bad := 0, 0
-	for _, ks := range a.Kinds {
-		ok += ks.OK
-		bad += ks.Loss
+	return ratioPercent(a.Loss, a.OK+a.Loss)
+}
+
+// availabilityPercent returns the share of attempted probes that succeeded.
+func availabilityPercent(a *analyze.Analysis) string {
+	return ratioPercent(a.OK, a.OK+a.Loss)
+}
+
+func ratioPercent(part, total int) string {
+	if total == 0 {
+		return "n/a"
 	}
-	if ok+bad == 0 {
-		return "0%"
-	}
-	s := strconv.FormatFloat(float64(bad)/float64(ok+bad)*100, 'f', 2, 64)
-	// Trim trailing zeros of the fraction only; a bare integer like "0" must
-	// stay "0" (naive TrimRight would turn it into an empty string).
+	s := strconv.FormatFloat(float64(part)/float64(total)*100, 'f', 3, 64)
 	s = strings.TrimRight(s, "0")
 	s = strings.TrimRight(s, ".")
 	if s == "" {

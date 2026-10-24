@@ -89,19 +89,35 @@ func (r *Runner) Run(ctx context.Context) {
 func (r *Runner) loop(ctx context.Context, p Prober) {
 	defer r.wg.Done()
 
-	// Small random offset so the three chains never fire in lockstep.
-	if j := r.cfg.Interval; j > 1 {
+	interval := r.cfg.Interval
+	if interval <= 0 {
+		interval = time.Second
+	}
+	// Random phase offset so the chains never fire in lockstep, then schedule
+	// against absolute deadlines instead of a ticker. This keeps cadence
+	// stable without accumulating drift, and never fires a catch-up burst
+	// when one probe takes longer than the interval.
+	next := time.Now()
+	if interval > 1 {
+		next = next.Add(time.Duration(rand.Int63n(int64(interval))))
+	}
+
+	for {
+		if wait := time.Until(next); wait > 0 {
+			timer := time.NewTimer(wait)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return
+			case <-timer.C:
+			}
+		}
 		select {
 		case <-ctx.Done():
 			return
-		case <-time.After(time.Duration(rand.Int63n(int64(j)))):
+		default:
 		}
-	}
 
-	ticker := time.NewTicker(r.cfg.Interval)
-	defer ticker.Stop()
-
-	for {
 		pctx, cancel := context.WithTimeout(ctx, r.cfg.Timeout)
 		s := p.Probe(pctx)
 		cancel()
@@ -112,10 +128,11 @@ func (r *Runner) loop(ctx context.Context, p Prober) {
 			return
 		}
 
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
+		next = next.Add(interval)
+		if time.Now().After(next) {
+			// Slow probe: keep at least one interval between completions
+			// rather than immediately firing again.
+			next = time.Now().Add(interval)
 		}
 	}
 }

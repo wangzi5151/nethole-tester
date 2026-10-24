@@ -12,7 +12,7 @@ DATE     ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 LDFLAGS  := -s -w -X main.version=$(VERSION) -X main.commit=$(COMMIT) -X main.date=$(DATE)
 GCFLAGS  := -trimpath
 
-.PHONY: all build test test-net vet fmt tidy clean run quick report dist release help
+.PHONY: all build test test-net vet fmt tidy clean run quick report check dist release help
 
 all: build
 
@@ -47,6 +47,10 @@ quick: build
 
 report: build
 	./$(BIN)/$(BINARY) report --in=./nethole-out --complaint
+
+## check: CI gate for an existing run (loss >1% or any incident fails)
+check: build
+	./$(BIN)/$(BINARY) check --in=./nethole-out --max-loss=1 --max-holes=0
 
 ## dist: cross-compile static binaries for every supported target
 dist: clean

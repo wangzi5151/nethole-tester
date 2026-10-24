@@ -50,8 +50,13 @@ const htmlTemplate = `<!DOCTYPE html>
   </div>
 
   <div class="panel">
-    <h3 style="margin:0 0 10px">网洞事件 / Hole events</h3>
+    <h3 style="margin:0 0 10px">网洞事件 / Incidents <span class="pill">已合并 / merged</span></h3>
     <div id="events"></div>
+  </div>
+
+  <div class="panel">
+    <h3 style="margin:0 0 10px">各目标明细 / Per-target breakdown</h3>
+    <div id="targets"></div>
   </div>
 
   <div class="panel">
@@ -188,15 +193,30 @@ var DATA = {{DATA}};
 
   // events table
   var ev = $('events');
-  if (!DATA.events || DATA.events.length === 0){
+  var incidents = DATA.incident_list || [];
+  if (!incidents.length){
     ev.innerHTML = '<div style="color:var(--mut)">未捕获到达到阈值的网洞事件（no holes above threshold）</div>';
   } else {
-    var html = '<table><tr><th>#</th><th>开始 Start</th><th>持续</th><th>类型</th><th>严重度</th><th>说明</th></tr>';
-    DATA.events.forEach(function(e, i){
-      html += '<tr><td>' + (i+1) + '</td><td>' + e.start + '</td><td>' + e.dur_s.toFixed(1) + 's</td><td>' + e.kind + '</td><td class="sev-' + e.sev + '">' + e.sev + '</td><td>' + escapeHtml(e.why) + '</td></tr>';
+    var html = '<table><tr><th>#</th><th>开始 Start</th><th>持续</th><th>涉及链路</th><th>目标</th><th>严重度</th><th>说明</th></tr>';
+    incidents.forEach(function(e, i){
+      html += '<tr><td>' + (i+1) + '</td><td>' + e.start + '</td><td>' + e.dur_s.toFixed(1) + 's</td><td>' + e.kind + '</td><td>' + escapeHtml(e.target || '—') + '</td><td class="sev-' + e.sev + '">' + e.sev + '</td><td>' + escapeHtml(e.why) + '</td></tr>';
     });
     html += '</table>';
     ev.innerHTML = html;
+  }
+
+  // per-target table
+  var tg = $('targets');
+  if (!DATA.targets || DATA.targets.length === 0){
+    tg.innerHTML = '<div style="color:var(--mut)">没有目标数据 / no target data</div>';
+  } else {
+    var th = '<table><tr><th>链路</th><th>目标</th><th>样本</th><th>丢包</th><th>丢包率</th><th>平均 ms</th><th>p95 ms</th><th>最大 ms</th></tr>';
+    DATA.targets.forEach(function(t){
+      var cls = t.loss_pct > 5 ? ' class="sev-critical"' : '';
+      th += '<tr><td>' + escapeHtml(t.kind) + '</td><td>' + escapeHtml(t.target) + '</td><td>' + t.samples + '</td><td>' + t.loss + '</td><td' + cls + '>' + t.loss_pct.toFixed(2) + '%</td><td>' + t.avg_ms.toFixed(1) + '</td><td>' + t.p95_ms.toFixed(1) + '</td><td>' + t.max_ms.toFixed(1) + '</td></tr>';
+    });
+    th += '</table>';
+    tg.innerHTML = th;
   }
 
   var ul = $('hints');

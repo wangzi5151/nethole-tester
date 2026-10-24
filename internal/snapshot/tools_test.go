@@ -49,3 +49,20 @@ func TestFindToolOnPath(t *testing.T) {
 		t.Error("findTool(sh) = empty, want a path")
 	}
 }
+
+func TestTraceHost(t *testing.T) {
+	cases := map[string]string{
+		"1.1.1.1":                    "1.1.1.1",
+		"1.1.1.1:443":                "1.1.1.1",
+		"www.example.com:53":         "www.example.com",
+		"[2606:4700:4700::1111]:443": "2606:4700:4700::1111",
+		"2606:4700:4700::1111":       "2606:4700:4700::1111",
+		"  example.com  ":            "example.com",
+		"":                           "",
+	}
+	for in, want := range cases {
+		if got := traceHost(in); got != want {
+			t.Errorf("traceHost(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

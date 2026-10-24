@@ -4,7 +4,7 @@
 
 | 文件 | 来源 | 说明 |
 |---|---|---|
-| `tui.svg` | `internal/ui` 白盒渲染 `View()` | 实时面板：三链路 sparkline + 网洞事件 |
+| `tui.svg` | `internal/ui` 白盒渲染 `View()` | 实时面板：三链路 last/avg/p95 + sparkline + 丢包条 + 网洞事件 |
 | `report-html.svg` | 真实 `samples.jsonl` 数据 | 离线 HTML 报告的布局与真实延迟曲线 |
 | `complaint.svg` | 真实 `complaint.txt` | 运营商申诉报告排版 |
 

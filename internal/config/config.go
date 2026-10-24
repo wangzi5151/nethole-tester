@@ -26,6 +26,10 @@ type Thresholds struct {
 	// BaselineWindow is the number of recent successful samples used to compute
 	// the rolling latency baseline per chain.
 	BaselineWindow int `json:"baseline_window"`
+	// SpikeWarmup is how many successful samples must be collected before
+	// latency-spike detection is armed. This prevents a cold-start outlier from
+	// being reported as a hole.
+	SpikeWarmup int `json:"spike_warmup"`
 }
 
 // DefaultThresholds returns the conservative defaults shipped to users.
@@ -36,6 +40,7 @@ func DefaultThresholds() Thresholds {
 		LossBurst:      3,
 		TCPTimeout:     2 * time.Second,
 		BaselineWindow: 20,
+		SpikeWarmup:    5,
 	}
 	t.sync()
 	return t
@@ -85,6 +90,9 @@ func (c *Config) Sync() {
 	}
 	if c.Thresholds.BaselineWindow <= 0 {
 		c.Thresholds.BaselineWindow = 20
+	}
+	if c.Thresholds.SpikeWarmup <= 0 {
+		c.Thresholds.SpikeWarmup = 5
 	}
 	if c.MaxLogMB <= 0 {
 		c.MaxLogMB = 8

@@ -9,6 +9,8 @@ package main
 import (
 	"bufio"
 	"context"
+	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -40,8 +42,24 @@ var (
 	date    = "unknown"
 )
 
+// exitError lets a command request a specific process exit code (used by
+// `nethole check` so CI can fail a build without printing an ugly "error:").
+type exitError struct {
+	code int
+	msg  string
+}
+
+func (e *exitError) Error() string { return e.msg }
+
 func main() {
 	if err := run(os.Args[1:]); err != nil {
+		var ee *exitError
+		if errors.As(err, &ee) {
+			if ee.msg != "" {
+				fmt.Fprintln(os.Stderr, ee.msg)
+			}
+			os.Exit(ee.code)
+		}
 		fmt.Fprintln(os.Stderr, "error:", err)
 		os.Exit(1)
 	}
@@ -60,6 +78,8 @@ func run(args []string) error {
 		return runCmd(args)
 	case "report", "export":
 		return reportCmd(args)
+	case "check":
+		return checkCmd(args)
 	case "version", "-v", "--version":
 		fmt.Printf("NetHole-Tester %s (commit %s, built %s)\n", version, commit, date)
 		return nil
@@ -79,12 +99,14 @@ func usage() {
   nethole                      新手快速模式 (interactive quick start)
   nethole run [flags]          持续监控 (live monitoring)
   nethole report [flags]       从日志生成本地报告 / complaint / html / csv
+  nethole check [flags]        检查已有日志并按阈值返回退出码 (CI-friendly)
   nethole version              版本信息
 
 运行示例 Examples:
   nethole run --preset=dorm --duration=10m
   nethole run --preset=pi24x7 --headless --out=/var/log/nethole
   nethole report --in=./nethole-out --complaint
+  nethole check --in=./nethole-out --max-loss=1 --max-holes=0 --json
 
 常用参数 (run):
   --preset=dorm|mobile5g|pi24x7   配置预设
@@ -97,6 +119,14 @@ func usage() {
   --icmp=1.1.1.1,223.5.5.5        ICMP 目标
   --tcp=1.1.1.1:443,...           TCP 目标
   --dns=1.1.1.1:53,...            DNS 服务器
+
+常用参数 (check):
+  --in=./nethole-out              日志目录
+  --json                          输出机器可读 JSON 摘要
+  --max-loss=1.0                  丢包率超过该百分比则失败 (-1 关闭)
+  --max-holes=0                   合并网洞超过该数量则失败 (-1 关闭)
+  --min-score=80                  质量评分低于该值则失败 (0 关闭)
+  --max-p95=200                   p95 延迟超过该毫秒数则失败 (0 关闭)
 `)
 }
 
@@ -294,6 +324,11 @@ type liveEvent struct {
 // snapshotWait bounds how long an event writer waits for its evidence snapshot.
 const snapshotWait = 6 * time.Second
 
+// snapshotCooldown avoids firing three identical traceroutes when all chains
+// detect the same outage within a second of each other. The first event of an
+// incident keeps the evidence; siblings reuse the incident window.
+const snapshotCooldown = 8 * time.Second
+
 // runEngine is the single consumer of the probe stream. It persists every
 // sample, feeds the detector, fires evidence snapshots and mirrors status to
 // the UI without ever blocking the probers.
@@ -309,6 +344,7 @@ func runEngine(ctx context.Context, cfg config.Config, runner *probe.Runner, sto
 		total, loss, holes int
 		active             = map[int64]*liveEvent{}
 		snapSem            = make(chan struct{}, 2) // limit concurrent traceroutes
+		lastSnap           time.Time
 		wg                 sync.WaitGroup
 		samples            = runner.Samples()
 		checkpoint         = time.NewTicker(5 * time.Second)
@@ -356,7 +392,9 @@ loop:
 				break loop
 			}
 			total++
-			if !s.OK {
+			// Refused connections are a target-config issue, not loss; keep
+			// the live counters consistent with the final analysis.
+			if !s.OK && !s.ConnRefused {
 				loss++
 			}
 			if err := store.WriteSample(s); err != nil {
@@ -373,9 +411,13 @@ loop:
 					holes++
 					frame.HoleCount = holes
 					frame.Activity = true
-					ch := make(chan *model.Snapshot, 1)
+					var ch chan *model.Snapshot
+					if cfg.EnableSnapshot && time.Since(lastSnap) >= snapshotCooldown {
+						ch = make(chan *model.Snapshot, 1)
+						lastSnap = time.Now()
+						go captureAsync(ctx, cfg, snapSem, ch, upd.Event.Target)
+					}
 					active[upd.Event.ID] = &liveEvent{ev: upd.Event, snap: ch}
-					go captureAsync(ctx, cfg, snapSem, ch)
 					// Durable from the very first instant.
 					ev := upd.Event
 					ev.RunID = runID
@@ -430,7 +472,7 @@ loop:
 	wg.Wait()
 }
 
-func captureAsync(ctx context.Context, cfg config.Config, sem chan struct{}, ch chan *model.Snapshot) {
+func captureAsync(ctx context.Context, cfg config.Config, sem chan struct{}, ch chan *model.Snapshot, traceTarget string) {
 	if !cfg.EnableSnapshot {
 		ch <- nil
 		return
@@ -441,7 +483,7 @@ func captureAsync(ctx context.Context, cfg config.Config, sem chan struct{}, ch 
 	// gets its own short-lived background context.
 	sctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	ch <- snapshot.Capture(sctx, cfg)
+	ch <- snapshot.Capture(sctx, cfg, traceTarget)
 }
 
 // finish loads what was logged and writes text/html/csv + a complaint report.
@@ -557,4 +599,95 @@ func reportCmd(args []string) error {
 		fmt.Println("申诉报告 Complaint written:", path)
 	}
 	return nil
+}
+
+// ---------------------------------------------------------------------------
+// check command
+// ---------------------------------------------------------------------------
+
+// checkReport is the JSON envelope emitted by `nethole check --json`.
+type checkReport struct {
+	report.Summary
+	Pass     bool     `json:"pass"`
+	Failures []string `json:"failures,omitempty"`
+}
+
+// checkCmd reads an existing run and evaluates optional thresholds. It exits 0
+// when every configured threshold is met and 1 otherwise, which makes it easy
+// to wire into CI or a cron job. With no thresholds it acts as an inspector.
+func checkCmd(args []string) error {
+	fs := flag.NewFlagSet("check", flag.ContinueOnError)
+	in := fs.String("in", "./nethole-out", "directory containing samples.jsonl/events.jsonl")
+	asJSON := fs.Bool("json", false, "print a machine-readable JSON summary")
+	maxLoss := fs.Float64("max-loss", -1, "fail when overall loss percent is greater than this (-1 disables)")
+	maxHoles := fs.Int("max-holes", -1, "fail when merged incidents exceed this count (-1 disables)")
+	minScore := fs.Int("min-score", 0, "fail when quality score is below this (0 disables)")
+	maxP95 := fs.Float64("max-p95", 0, "fail when overall p95 latency (ms) is greater than this (0 disables)")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	samples, err := analyze.LoadSamples(filepath.Join(*in, "samples.jsonl"))
+	if err != nil {
+		return err
+	}
+	events, err := analyze.LoadEvents(filepath.Join(*in, "events.jsonl"))
+	if err != nil {
+		return err
+	}
+	if len(samples) == 0 && len(events) == 0 {
+		return fmt.Errorf("no data found under %s (run 'nethole run' first)", *in)
+	}
+	a := analyze.Analyze(samples, events)
+
+	failures := evaluateCheck(a, *maxLoss, *maxHoles, *minScore, *maxP95)
+
+	if *asJSON {
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		if err := enc.Encode(checkReport{
+			Summary:  report.BuildSummary(a),
+			Pass:     len(failures) == 0,
+			Failures: failures,
+		}); err != nil {
+			return err
+		}
+	} else {
+		fmt.Printf("NetHole check: %s  samples=%d  loss=%.3f%%  availability=%.3f%%\n",
+			a.Duration.Round(time.Second), a.TotalSamples, a.LossPct, a.AvailabilityPct)
+		if a.Grade != "n/a" {
+			fmt.Printf("quality=%d/100 (%s)  p95=%.1fms  jitter=%.1fms\n", a.QualityScore, a.Grade, a.P95Ms, a.JitterMs)
+		} else {
+			fmt.Println("quality=n/a (no successful samples)")
+		}
+		fmt.Printf("incidents=%d  raw_events=%d  hole_time=%s\n", len(a.Incidents), len(a.Events), a.HoleDuration.Round(time.Second))
+	}
+
+	if len(failures) > 0 {
+		return &exitError{code: 1, msg: "check failed: " + strings.Join(failures, "; ")}
+	}
+	if !*asJSON {
+		fmt.Println("PASS")
+	}
+	return nil
+}
+
+// evaluateCheck applies the optional check thresholds and returns one human
+// readable message per violated threshold. Negative maxLoss/maxHoles and zero
+// minScore/maxP95 disable that particular check.
+func evaluateCheck(a *analyze.Analysis, maxLoss float64, maxHoles, minScore int, maxP95 float64) []string {
+	var failures []string
+	if maxLoss >= 0 && a.LossPct > maxLoss {
+		failures = append(failures, fmt.Sprintf("loss %.3f%% > max-loss %.3f%%", a.LossPct, maxLoss))
+	}
+	if maxHoles >= 0 && len(a.Incidents) > maxHoles {
+		failures = append(failures, fmt.Sprintf("incidents %d > max-holes %d", len(a.Incidents), maxHoles))
+	}
+	if minScore > 0 && a.QualityScore < minScore {
+		failures = append(failures, fmt.Sprintf("quality %d < min-score %d", a.QualityScore, minScore))
+	}
+	if maxP95 > 0 && a.P95Ms > maxP95 {
+		failures = append(failures, fmt.Sprintf("p95 %.1fms > max-p95 %.1fms", a.P95Ms, maxP95))
+	}
+	return failures
 }

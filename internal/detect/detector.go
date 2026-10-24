@@ -4,6 +4,7 @@ package detect
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/wangzi5151/nethole-tester/internal/config"
 	"github.com/wangzi5151/nethole-tester/internal/model"
@@ -17,13 +18,25 @@ type Update struct {
 	Ended   bool
 }
 
+// mode records what kind of anomaly currently holds the event open, so a
+// latency spike is not closed on the very next sample while it is still high.
+type mode int
+
+const (
+	modeNone mode = iota
+	modeLoss
+	modeSpike
+)
+
 type state struct {
-	kind    model.Kind
-	target  string
-	base    []float64 // ring of recent successful RTTs (ms)
-	baseIdx int
-	loss    int // consecutive failed probes
-	active  *model.HoleEvent
+	kind      model.Kind
+	target    string
+	base      []float64 // ring of recent successful RTTs (ms)
+	baseIdx   int
+	loss      int // consecutive failed probes
+	lossStart time.Time
+	active    *model.HoleEvent
+	mode      mode
 }
 
 // Detector applies thresholds to incoming samples.
@@ -71,6 +84,11 @@ func (d *Detector) Observe(s model.Sample) Update {
 }
 
 func (d *Detector) onFailure(st *state, s model.Sample) Update {
+	if st.loss == 0 {
+		// Remember the very first failure so the event covers the whole
+		// burst, not just the sample that crossed the threshold.
+		st.lossStart = s.Time
+	}
 	st.loss++
 	if st.active == nil {
 		if st.loss >= d.th.LossBurst {
@@ -81,19 +99,24 @@ func (d *Detector) onFailure(st *state, s model.Sample) Update {
 			if st.loss >= d.th.LossBurst*2 {
 				sev = model.SevCritical
 			}
+			start := st.lossStart
+			if start.IsZero() {
+				start = s.Time
+			}
 			ev := &model.HoleEvent{
 				ID:        d.newID(),
-				Start:     s.Time,
+				Start:     start,
 				End:       s.Time,
 				Kind:      st.kind,
 				Target:    st.target,
 				Reason:    fmt.Sprintf("%d consecutive probe failures on %s", st.loss, st.target),
 				Severity:  sev,
-				Samples:   1,
-				LossCount: 1,
+				Samples:   st.loss,
+				LossCount: st.loss,
 				MaxRTTms:  0,
 			}
 			st.active = ev
+			st.mode = modeLoss
 			return Update{Event: *ev, Started: true}
 		}
 		return Update{}
@@ -111,28 +134,55 @@ func (d *Detector) onFailure(st *state, s model.Sample) Update {
 
 func (d *Detector) onSuccess(st *state, s model.Sample) Update {
 	st.loss = 0
+	st.lossStart = time.Time{}
+	baseline := st.average()
 
 	if st.active != nil {
-		// Recover the event on the first healthy sample.
-		st.active.End = s.Time
-		st.active.Samples++
-		if s.RTTms > st.active.MaxRTTms {
-			st.active.MaxRTTms = s.RTTms
+		switch st.mode {
+		case modeSpike:
+			// A sustained spike stays one event until latency actually
+			// recovers, instead of closing on the next sample (which used to
+			// turn a 30-second stall into a 1-sample blip).
+			if d.isSpike(s.RTTms, baseline) {
+				st.active.End = s.Time
+				st.active.Samples++
+				if s.RTTms > st.active.MaxRTTms {
+					st.active.MaxRTTms = s.RTTms
+				}
+				if s.RTTms-baseline > 2*d.th.LatencySpikeMs {
+					st.active.Severity = model.SevCritical
+				}
+				return Update{Event: *st.active}
+			}
+			ev := st.active
+			ev.End = s.Time
+			ev.Samples++
+			st.active = nil
+			st.mode = modeNone
+			st.push(s.RTTms)
+			return Update{Event: *ev, Ended: true}
+		default:
+			// Loss event: the first healthy sample ends it.
+			st.active.End = s.Time
+			st.active.Samples++
+			if s.RTTms > st.active.MaxRTTms {
+				st.active.MaxRTTms = s.RTTms
+			}
+			ev := st.active
+			st.active = nil
+			st.mode = modeNone
+			st.push(s.RTTms)
+			return Update{Event: *ev, Ended: true}
 		}
-		ev := st.active
-		st.active = nil
-		return Update{Event: *ev, Ended: true}
 	}
 
-	baseline := st.average()
-	spike := d.isSpike(s.RTTms, baseline)
-	if !spike {
-		// Only feed healthy samples into the baseline, otherwise a spike
-		// would poison the very reference used to detect it.
+	// Warm-up: never fire a spike before the baseline is meaningful.
+	if len(st.base) < d.th.SpikeWarmup {
 		st.push(s.RTTms)
+		return Update{}
 	}
 
-	if spike {
+	if d.isSpike(s.RTTms, baseline) {
 		ev := &model.HoleEvent{
 			ID:       d.newID(),
 			Start:    s.Time,
@@ -148,8 +198,12 @@ func (d *Detector) onSuccess(st *state, s model.Sample) Update {
 			ev.Severity = model.SevCritical
 		}
 		st.active = ev
+		st.mode = modeSpike
 		return Update{Event: *ev, Started: true}
 	}
+	// Only feed healthy samples into the baseline, otherwise a spike would
+	// poison the very reference used to detect it.
+	st.push(s.RTTms)
 	return Update{}
 }
 
@@ -169,6 +223,7 @@ func (d *Detector) Flush() []model.HoleEvent {
 		if st.active != nil {
 			ev := *st.active
 			st.active = nil
+			st.mode = modeNone
 			out = append(out, ev)
 		}
 	}

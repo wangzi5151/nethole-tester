@@ -50,6 +50,10 @@ func WriteComplaint(w io.Writer, a *analyze.Analysis, meta Meta) {
 	fmt.Fprintf(w, "  监控时段 Period : %s ~ %s\n", a.Start.Format("2006-01-02 15:04:05"), a.End.Format("2006-01-02 15:04:05"))
 	fmt.Fprintf(w, "  监控时长 Duration: %s\n", a.Duration.Round(time.Second))
 	fmt.Fprintf(w, "  采样总数 Samples : %d\n", a.TotalSamples)
+	fmt.Fprintf(w, "  可用率 Availability: %.3f%%  (丢包 %.3f%%)\n", a.AvailabilityPct, a.LossPct)
+	if a.Grade != "n/a" {
+		fmt.Fprintf(w, "  综合质量 Quality  : %d/100 (%s, 启发式评分)\n", a.QualityScore, a.Grade)
+	}
 	fmt.Fprintf(w, "  异常事件 Holes   : 原始 %d 条，合并为 %d 起，累计异常 %s\n",
 		len(a.Events), len(a.Incidents), a.HoleDuration.Round(time.Second))
 	fmt.Fprintln(w)
@@ -104,7 +108,20 @@ func WriteComplaint(w io.Writer, a *analyze.Analysis, meta Meta) {
 		fmt.Fprintln(w)
 	}
 
-	fmt.Fprintln(w, "【四、建议话术 / Suggested script】")
+	fmt.Fprintln(w, "【四、结论 / Conclusion】")
+	if a.Grade != "n/a" {
+		fmt.Fprintf(w, "  监控期间综合可用率 %.3f%%，质量评分 %d/100（%s）。", a.AvailabilityPct, a.QualityScore, a.Grade)
+	} else {
+		fmt.Fprintf(w, "  监控期间未获得可用样本（refused=%d）。", a.Refused)
+	}
+	if a.AvailabilityPct < 99 || len(a.Incidents) > 0 {
+		fmt.Fprintln(w, " 存在可复现的丢包/延迟异常，已记录时间轴与现场快照。")
+	} else {
+		fmt.Fprintln(w, " 未捕获到达到阈值的异常；若体感仍有卡顿，建议延长监控时长。")
+	}
+	fmt.Fprintln(w)
+
+	fmt.Fprintln(w, "【五、建议话术 / Suggested script】")
 	fmt.Fprintln(w, "  “您好，我的宽带到户速率正常，但存在周期性丢包与延迟突增，")
 	fmt.Fprintln(w, "   已用 NetHole-Tester 记录了完整的毫秒级证据（见上方时间轴与快照）。")
 	fmt.Fprintln(w, "   这属于上网质量不达标，请安排线路检测与光猫/端口排查，并登记工单。”")

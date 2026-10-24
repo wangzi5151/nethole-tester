@@ -134,6 +134,12 @@ func RenderText(w io.Writer, a *Analysis) {
 	}
 	fmt.Fprintf(w, " 持续 Duration : %s\n", a.Duration.Round(time.Millisecond))
 	fmt.Fprintf(w, " 样本 Samples  : %d\n", a.TotalSamples)
+	fmt.Fprintf(w, " 可用率 Avail  : %.3f%%  (丢包 %.3f%%, refused %d 不计)\n", a.AvailabilityPct, a.LossPct, a.Refused)
+	if a.Grade != "n/a" {
+		fmt.Fprintf(w, " 质量评分 Score: %d/100 (%s)  启发式，仅供参考 / heuristic, not a diagnosis\n", a.QualityScore, a.Grade)
+	} else {
+		fmt.Fprintln(w, " 质量评分 Score: n/a (没有成功样本 / no successful samples)")
+	}
 	fmt.Fprintf(w, " 网洞 Holes    : %d 起 / 原始 %d 条  (累计 %s)\n", len(a.Incidents), len(a.Events), a.HoleDuration.Round(time.Millisecond))
 	fmt.Fprintln(w)
 
@@ -153,6 +159,13 @@ func RenderText(w io.Writer, a *Analysis) {
 			ks.MinMs, ks.AvgMs, ks.P50Ms, ks.P95Ms, ks.P99Ms, ks.MaxMs, ks.JitterMs)
 		fmt.Fprintf(w, "  趋势 Trend : %s\n", Sparkline(ks.RTTs, 56))
 		fmt.Fprintf(w, "  丢包 Loss  : %s   (· good  ░▒▓█ bad)\n", LossBars(samplesOfKind(a, k), 56))
+		if ts := TargetsOfKind(a, k); len(ts) > 1 {
+			fmt.Fprintln(w, "  目标 Target:")
+			for _, t := range ts {
+				fmt.Fprintf(w, "    %-28s loss %5.2f%%  avg %7.1f  p95 %7.1f  max %8.1f\n",
+					t.Target, t.LossPct, t.AvgMs, t.P95Ms, t.MaxMs)
+			}
+		}
 		fmt.Fprintln(w)
 	}
 

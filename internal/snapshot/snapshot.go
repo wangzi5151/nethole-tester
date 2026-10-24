@@ -13,9 +13,11 @@ import (
 	"github.com/wangzi5151/nethole-tester/internal/model"
 )
 
-// Capture gathers all evidence concurrently and returns a Snapshot. It always
+// Capture gathers all evidence concurrently and returns a Snapshot. traceTarget
+// is the host (or host:port) whose chain just failed, so the traceroute points
+// at the path that actually broke instead of a fixed ICMP target. It always
 // returns a non-nil result, even on total failure.
-func Capture(ctx context.Context, cfg config.Config) *model.Snapshot {
+func Capture(ctx context.Context, cfg config.Config, traceTarget string) *model.Snapshot {
 	s := &model.Snapshot{
 		Time: time.Now(),
 		DNS:  map[string]string{},
@@ -35,7 +37,7 @@ func Capture(ctx context.Context, cfg config.Config) *model.Snapshot {
 	wg.Add(4)
 	go func() { // traceroute
 		defer wg.Done()
-		if txt, note := traceroute(ctx, cfg); txt != "" {
+		if txt, note := traceroute(ctx, cfg, traceTarget); txt != "" {
 			mu.Lock()
 			s.Traceroute = txt
 			mu.Unlock()

@@ -2,6 +2,7 @@ package snapshot
 
 import (
 	"context"
+	"net"
 	"os/exec"
 	"runtime"
 	"strings"
@@ -13,10 +14,13 @@ import (
 // traceroute runs whichever of mtr/traceroute/tracepath is installed. It never
 // shells out to anything but those fixed, read-only diagnostics (no user input
 // reaches the shell), keeping the tool compliant and safe.
-func traceroute(ctx context.Context, cfg config.Config) (string, string) {
-	target := "1.1.1.1"
-	if len(cfg.ICMPTargets) > 0 {
-		target = cfg.ICMPTargets[0]
+func traceroute(ctx context.Context, cfg config.Config, traceTarget string) (string, string) {
+	target := traceHost(traceTarget)
+	if target == "" {
+		target = "1.1.1.1"
+		if len(cfg.ICMPTargets) > 0 {
+			target = cfg.ICMPTargets[0]
+		}
 	}
 	ctx, cancel := context.WithTimeout(ctx, 7*time.Second)
 	defer cancel()
@@ -52,4 +56,18 @@ func traceroute(ctx context.Context, cfg config.Config) (string, string) {
 		}
 	}
 	return "", "no traceroute tool found (install mtr or traceroute for hop evidence)"
+}
+
+// traceHost reduces a probe target to something traceroute understands.
+// "example.com:443" and "[2606:4700::1]:443" become their host part; a bare
+// IPv6 address (too many colons for SplitHostPort) is kept as-is.
+func traceHost(target string) string {
+	target = strings.TrimSpace(target)
+	if target == "" {
+		return ""
+	}
+	if host, _, err := net.SplitHostPort(target); err == nil {
+		return host
+	}
+	return strings.Trim(target, "[]")
 }

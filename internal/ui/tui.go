@@ -3,6 +3,7 @@ package ui
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -118,14 +119,14 @@ func (m *Model) apply(f Frame) {
 		m.rtts[s.Kind] = appendCappedFloat(m.rtts[s.Kind], s.RTTms, ringSize)
 	}
 
-	if f.Activity && f.Update.Event.ID != 0 {
+	if f.Update.Event.ID != 0 {
 		if f.Update.Started {
 			m.events = append([]model.HoleEvent{f.Update.Event}, m.events...)
 			if len(m.events) > 6 {
 				m.events = m.events[:6]
 			}
-		} else if f.Update.Ended && len(m.events) > 0 {
-			// Update the matching in-memory event with its final duration.
+		} else {
+			// Ended and progress updates keep the live duration accurate.
 			for i := range m.events {
 				if m.events[i].ID == f.Update.Event.ID {
 					m.events[i] = f.Update.Event
@@ -147,30 +148,51 @@ func (m Model) View() string {
 	b.WriteString(titleStyle.Render(" NetHole-Tester "))
 	b.WriteString(dim.Render(" 网络隐形断流探测器 / invisible-drop detector"))
 	b.WriteString("\n")
-	fmt.Fprintf(&b, " preset=%s  interval=%s  elapsed=%s  holes=", m.cfg.Name, m.cfg.Interval, m.elapsed.Round(time.Second))
+	fmt.Fprintf(&b, " preset=%s  interval=%s  elapsed=%s", m.cfg.Name, m.cfg.Interval, m.elapsed.Round(time.Second))
+	if m.cfg.Duration > 0 {
+		fmt.Fprintf(&b, "/%s", m.cfg.Duration.Round(time.Second))
+	}
+	fmt.Fprintf(&b, "  holes=")
 	if m.holes > 0 {
 		b.WriteString(bad.Render(fmt.Sprintf("%d", m.holes)))
 	} else {
 		b.WriteString("0")
 	}
 	fmt.Fprintf(&b, "  samples=%d  lost=%d\n", m.total, m.loss)
+	fmt.Fprintf(&b, " live availability=%.2f%%  recent p95=%.1fms\n", m.availability(), m.p95All())
 	b.WriteString(dim.Render(strings.Repeat("─", clamp(m.width, 40, 100))) + "\n")
 
+	chartW := clamp((m.width-34)/2, 10, 32)
 	for _, k := range m.cfg.Kinds() {
-		spark := analyze.Sparkline(m.rtts[k], 40)
-		lossStrip := lossStrip(m.losses[k], m.refused[k], 40)
+		spark := analyze.Sparkline(m.rtts[k], chartW)
+		strip := lossStrip(m.losses[k], m.refused[k], chartW)
 		lastTxt := "waiting…"
+		alert := false
 		if s, ok := m.lastSample(k); ok {
 			switch {
 			case s.OK:
-				lastTxt = fmt.Sprintf("%6.1fms", s.RTTms)
+				lastTxt = fmt.Sprintf("%.1fms", s.RTTms)
 			case s.ConnRefused:
-				lastTxt = bad.Render("  REFUSED")
+				lastTxt, alert = "REFUSED", true
 			default:
-				lastTxt = bad.Render("  TIMEOUT")
+				lastTxt, alert = "TIMEOUT", true
 			}
 		}
-		fmt.Fprintf(&b, " %-10s %s  %s  %s\n", k.Label(), padRight(lastTxt, 12), spark, dim.Render(lossStrip))
+		lastTxt = padRight(lastTxt, 9)
+		if alert {
+			lastTxt = bad.Render(lastTxt)
+		}
+		avgTxt, p95Txt, lossTxt := "—", "—", "—"
+		if len(m.rtts[k]) > 0 {
+			avgTxt = fmt.Sprintf("%.1fms", m.avgRTT(k))
+			p95Txt = fmt.Sprintf("%.1fms", m.p95RTT(k))
+		}
+		if len(m.losses[k]) > 0 {
+			lossTxt = fmt.Sprintf("%.1f%%", m.recentLossPct(k))
+		}
+		fmt.Fprintf(&b, " %-10s %s  avg %7s  p95 %7s  loss %6s\n",
+			k.Label(), lastTxt, avgTxt, p95Txt, lossTxt)
+		fmt.Fprintf(&b, "   trend %s  pkt %s\n", spark, dim.Render(strip))
 	}
 	b.WriteString(dim.Render(strings.Repeat("─", clamp(m.width, 40, 100))) + "\n")
 
@@ -191,6 +213,71 @@ func (m Model) View() string {
 	b.WriteString(dim.Render(" [q] 停止并导出报告 / stop & export  ·  Ctrl+C 退出"))
 	b.WriteString("\n")
 	return b.String()
+}
+
+func (m Model) avgRTT(k model.Kind) float64 {
+	xs := m.rtts[k]
+	if len(xs) == 0 {
+		return 0
+	}
+	var sum float64
+	for _, v := range xs {
+		sum += v
+	}
+	return sum / float64(len(xs))
+}
+
+func (m Model) p95RTT(k model.Kind) float64 { return percentile95(m.rtts[k]) }
+
+func (m Model) p95All() float64 {
+	var all []float64
+	for _, xs := range m.rtts {
+		all = append(all, xs...)
+	}
+	return percentile95(all)
+}
+
+// recentLossPct uses the ring buffer, excluding refused probes (host up, port
+// closed) so the live number matches the final analysis definition of loss.
+func (m Model) recentLossPct(k model.Kind) float64 {
+	lost := m.losses[k]
+	if len(lost) == 0 {
+		return 0
+	}
+	total, bad := 0, 0
+	for i, l := range lost {
+		if i < len(m.refused[k]) && m.refused[k][i] {
+			continue
+		}
+		total++
+		if l {
+			bad++
+		}
+	}
+	if total == 0 {
+		return 0
+	}
+	return float64(bad) / float64(total) * 100
+}
+
+func (m Model) availability() float64 {
+	if m.total == 0 {
+		return 100
+	}
+	return float64(m.total-m.loss) / float64(m.total) * 100
+}
+
+func percentile95(xs []float64) float64 {
+	if len(xs) == 0 {
+		return 0
+	}
+	sorted := append([]float64(nil), xs...)
+	sort.Float64s(sorted)
+	idx := int(float64(len(sorted)-1)*0.95 + 0.5)
+	if idx >= len(sorted) {
+		idx = len(sorted) - 1
+	}
+	return sorted[idx]
 }
 
 func (m Model) lastSample(k model.Kind) (model.Sample, bool) {
@@ -216,6 +303,8 @@ func lossStrip(lost, refused []bool, width int) string {
 	}
 	if len(lost) > width {
 		lost = lost[len(lost)-width:]
+	}
+	if len(refused) > width {
 		refused = refused[len(refused)-width:]
 	}
 	var b strings.Builder

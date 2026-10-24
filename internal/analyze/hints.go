@@ -71,6 +71,32 @@ func Hints(a *Analysis) []string {
 		hints = append(hints, fmt.Sprintf("TCP %s 连接被拒绝 (connection refused)：目标主机可达但端口未开放，请检查目标配置；这不是网络丢包，不计入网洞统计 (port closed on target, not a network hole).", t))
 	}
 
+	// 8. One destination inside a chain is much worse than its siblings ->
+	// the problem is probably on that path/target, not the whole uplink.
+	for _, k := range SortedKinds(a.Kinds) {
+		ts := TargetsOfKind(a, k)
+		if len(ts) < 2 {
+			continue
+		}
+		var worst, best *TargetStat
+		for _, t := range ts {
+			if t.OK+t.Loss == 0 {
+				continue
+			}
+			if worst == nil || t.LossPct > worst.LossPct {
+				worst = t
+			}
+			if best == nil || t.LossPct < best.LossPct {
+				best = t
+			}
+		}
+		if worst != nil && best != nil && worst != best &&
+			worst.LossPct > 10 && worst.LossPct > best.LossPct+10 {
+			hints = append(hints, fmt.Sprintf("%s 内部目标差异明显（%s %.1f%% vs %s %.1f%%）：更像是该目标/该路由的问题，而非整条宽带 (target-specific loss, not a whole-uplink outage).",
+				k.Label(), worst.Target, worst.LossPct, best.Target, best.LossPct))
+		}
+	}
+
 	if len(hints) == 0 {
 		hints = append(hints, "未发现明显相关性线索；若您确有卡顿体感，可延长监控时长并保留报告 (no strong correlation found; try a longer run).")
 	}

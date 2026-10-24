@@ -31,7 +31,9 @@
 >
 > **NetHole-Tester** is a dependency-free Go tool that catches intermittent packet
 > loss, latency spikes and TCP blackholes, snapshots the evidence the moment they
-> happen, and produces an ISP complaint report + an offline interactive HTML report.
+> happen, and produces an ISP complaint report + an offline interactive HTML report
+> with per-target breakdown, availability and a quality score. A CI-friendly
+> `check` command turns logs into pass/fail exit codes.
 > **No telemetry, no upload, no LLM, no runtime.**
 
 <div align="center">
@@ -52,6 +54,7 @@
 - [三套预设 · Presets](#三套预设--presets)
 - [结果怎么看 · Reading results](#结果怎么看--reading-results)
 - [输出文件 · Outputs](#输出文件--outputs)
+- [CI / 自动化检查 · Check](#ci--自动化检查--check)
 - [隐私铁则 · Privacy](#-隐私铁则--privacy)
 - [安全与合规 · Safe use](#-安全与合规使用--safe-compliant-use)
 - [架构 / 目录结构 · Architecture](#架构--目录结构--architecture)
@@ -116,8 +119,12 @@ NetHole-Tester 的设计目标只有一个：
 - 🧷 **事件即落盘 + 合并去重**：网洞一发生就写盘并每 5 秒检查点，断电 / `kill -9` 也不丢；同一时刻的多链路异常自动合并为一「起」，不虚增。
 - 📸 **事件触发自动快照**：命中瞬间保存 traceroute/mtr、DNS 结果、ARP 表、Wi-Fi 信号。
 - 📊 **本地分析器**：完全离线，输出可读文本、ASCII 趋势图、Excel 友好的 CSV。
-- 📄 **一键申诉报告**：预排版文案 + 时间轴 + 证据，直接截图找客服。
-- 🌐 **离线交互 HTML 报告**：单个静态文件，浏览器打开即有可交互延迟曲线。
+- 🎯 **按目标拆分统计**：同一链路内哪个目标坏、哪个好一目了然，避免把单个目标的问题误判成整条宽带故障。
+- 🧮 **可用率 + 质量评分**：透明可复现的 0-100 启发式评分（可用率/尾部延迟/抖动），报告和终端都会显示。
+- 📄 **一键申诉报告**：预排版文案 + 时间轴 + 证据 + 结论，直接截图找客服。
+- 🌐 **离线交互 HTML 报告**：单个静态文件，浏览器打开即有可交互延迟曲线 + 目标明细表。
+- 🤖 **CI / 自动化检查**：`nethole check` 支持阈值 + JSON 摘要 + 退出码，可接 cron、GitHub Actions、监控脚本。
+- ♻️ **轮转日志可回读**：报告会读取 `.1 ... .N` 历史分片，7×24 长测不会只剩下最后一小段。
 - 🍓 **长时后台模式**：树莓派 / Termux 挂机，低 CPU、自动日志轮转，不会写爆存储。
 - 🎛 **三套预设** + 新手快速模式（按 `1` 直接开测）。
 - 🔒 **零遥测**：代码中没有任何上传/回传逻辑，数据只落在你自己的磁盘上。
@@ -253,7 +260,8 @@ curl -L https://github.com/wangzi5151/nethole-tester/releases/latest/download/ne
 - **趋势 Trend**：每个字符是一段时间的延迟快照，越右边越高。突然冒高再回落 = 延迟突跳。
 - **丢包 Loss**：`·` 正常，`░▒▓█` 丢失密度；出现连续的 `█` 就是断流。
 - **p95 / p99**：尾部延迟。平均值正常但 p99 很高 = 典型的「偶尔卡一下」。
-- **网洞事件**：达到阈值的那一刻被记录，含时长、类型、严重度和原因。
+- **网洞事件**：达到阈值的那一刻被记录，含时长、类型、严重度和原因；持续性的延迟突跳会保持为**一个**事件，而不是每个采样点都刷一条。
+- **可用率 / 质量评分**：可用率只统计真正到达网络的探测（refused 不计入丢包）；质量评分是启发式，权重为可用率 60 / p95 延迟 25 / 抖动 15，仅供参考。
 
 **看到 `ICMP 正常但 TCP 全红`？** 这往往不是断网，而是运营商对该 IP/端口做了限制或 NAT 问题——
 工具会在「相关性线索」里提示你，但**不会替你下绝对结论**。
@@ -276,12 +284,49 @@ curl -L https://github.com/wangzi5151/nethole-tester/releases/latest/download/ne
 | `samples.jsonl` | 原始样本日志（每行一个 JSON，供二次分析） |
 | `events.jsonl` | 事件日志（含事件快照证据） |
 
+> 上面的报告会同时读取当前日志与轮转后的历史分片（`samples.jsonl.1` 等），
+> 因此树莓派挂机数天后重新生成报告依然是完整的。
+
 重新导出（不改动原始日志）：
 
 ```bash
 ./nethole report --in=./nethole-out \
   --operator="中国电信" --account="你的宽带账号" \
   --contact="你的电话" --location="装机地址"
+```
+
+---
+
+## CI / 自动化检查 · Check
+
+`nethole check` 读取已有日志，按你给的阈值返回退出码（0 = 达标，1 = 超标），
+还可以直接输出 JSON，方便接 CI、cron、Zabbix/脚本告警。它**不会**重新探测，
+只做本地分析。
+
+```bash
+# 只查看摘要
+./nethole check --in=./nethole-out
+
+# 丢包 >1% 或出现任何合并网洞就失败
+./nethole check --in=./nethole-out --max-loss=1 --max-holes=0
+
+# 机器可读输出（stdout 为 JSON，失败信息写 stderr）
+./nethole check --in=./nethole-out --max-loss=1 --min-score=80 --json
+```
+
+| 参数 | 含义 |
+|---|---|
+| `--max-loss=1.0` | 总丢包率超过该百分比则失败（`-1` 关闭） |
+| `--max-holes=0` | 合并后的网洞起数超过该值则失败（`-1` 关闭） |
+| `--min-score=80` | 质量评分低于该值则失败（`0` 关闭） |
+| `--max-p95=200` | 总 p95 延迟超过该毫秒数则失败（`0` 关闭） |
+| `--json` | 输出包含 `pass` / `failures` 的稳定 JSON |
+
+GitHub Actions 示例：
+
+```yaml
+- name: Network quality gate
+  run: ./nethole check --in=./nethole-out --max-loss=1 --max-holes=0 --json
 ```
 
 ---
@@ -332,8 +377,8 @@ nethole-tester/
 │   ├── detect/                网洞检测器（丢包突发 / 延迟突跳 / 超时）
 │   ├── snapshot/              事件快照：traceroute / arp / dns / wifi / tools.go
 │   ├── storage/               JSONL 日志 + 按大小轮转
-│   ├── analyze/               统计 / ASCII 图 / CSV / 相关性线索
-│   ├── report/                申诉报告 + 离线交互 HTML
+│   ├── analyze/               统计 / 按目标拆分 / 可用率 / 质量评分 / ASCII 图 / CSV / 线索
+│   ├── report/                申诉报告 + 离线交互 HTML + 机器可读 JSON 摘要
 │   └── ui/                    bubbletea 实时终端界面
 ├── Makefile                   一键构建 + 交叉编译 + 校验和
 ├── .github/                   Issue 模板 + Release CI
@@ -351,9 +396,11 @@ nethole-tester/
 ```
 
 设计要点：
-- 每条链路一个独立 goroutine + 独立超时，**一条卡不会拖累其他链路**。
+- 每条链路一个独立 goroutine + 独立超时，**一条卡不会拖累其他链路**；按绝对时间调度，避免长期漂移和补发突发。
 - Engine 是样本流的唯一消费者，UI 用非阻塞发送，**界面卡顿绝不丢数据**。
-- 快照在**后台**抓取，并用信号量限制并发，**不阻塞探测**。
+- 快照在**后台**抓取，并用信号量限制并发，**不阻塞探测**；traceroute 会指向本次异常的目标（自动去掉端口），同一次故障的多条链路共用一个快照窗口，避免重复 traceroute。
+- 分析器读取当前日志 + 轮转分片；统计百分位时使用副本排序，**不会打乱用于趋势图的时序数据**。
+- 延迟突跳检测有 warm-up，且持续性突跳会合并为一个事件；冷启动的单个高 RTT 不会误报。
 
 ---
 
@@ -367,6 +414,7 @@ cd nethole-tester
 
 make build          # 本机二进制 -> bin/nethole
 make test           # 单元测试（不联网）
+make check          # 对 ./nethole-out 做 CI 门槛检查（丢包>1% 或出现网洞即失败）
 make dist           # 交叉编译全部平台 -> dist/ + SHA256SUMS
 ```
 
@@ -429,6 +477,14 @@ A: ICMP 在 Windows 上必须管理员权限（系统限制，无解）。请以
 
 **Q: 会不会太耗资源？**
 A: 默认每条链路 1 次/秒，树莓派预设 3 秒一次；探测为事件驱动、无忙轮询，实际占用很低（可用 `top` 自行确认）。我们不做未经验证的数字承诺。
+
+**Q: 质量评分是怎么算的？会诊断故障吗？**
+A: 不会诊断。它是固定公式的启发式摘要：可用率 60 分（3% 丢包扣到 0）、p95 延迟 25 分（50ms 满分、400ms 归零）、抖动 15 分（150ms 归零）。
+等级：A ≥90，B ≥75，C ≥60，D ≥40，其余 F。它的作用是让你快速判断「这段网络稳不稳」，
+具体原因仍要看时间轴、按目标拆分和相关性线索。
+
+**Q: 为什么报告里出现了很老的数据？**
+A: 因为分析器会读取轮转后的历史分片（`samples.jsonl.1 ... .N`），这正是长测需要的。如果只想看某一次运行，请使用独立的 `--out` 目录。
 
 **Q: 能把报告发给运营商吗？**
 A: 可以，`complaint.txt` 就是为此设计的，直接截图或复制即可。
