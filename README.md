@@ -212,6 +212,8 @@ curl -L https://github.com/wangzi5151/nethole-tester/releases/latest/download/ne
   输入数字后回车 (直接回车 = 1):
 ```
 
+选择 `0) 自定义参数` 后会继续询问预设、运行时长、探测间隔和输出目录，不会直接按默认参数启动。
+
 ### 命令行模式
 
 ```bash
@@ -413,7 +415,8 @@ git clone https://github.com/wangzi5151/nethole-tester
 cd nethole-tester
 
 make build          # 本机二进制 -> bin/nethole
-make test           # 单元测试（不联网）
+make test           # 单元测试（-short，默认不联网）
+make test-net       # 额外运行真实网络探测测试（会访问 1.1.1.1 等）
 make check          # 对 ./nethole-out 做 CI 门槛检查（丢包>1% 或出现网洞即失败）
 make dist           # 交叉编译全部平台 -> dist/ + SHA256SUMS
 ```

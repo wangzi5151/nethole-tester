@@ -24,7 +24,7 @@ build:
 
 ## test: fast unit tests (no network)
 test:
-	go test ./...
+	go test -short ./...
 
 ## test-net: include live network tests (hits 1.1.1.1 etc.)
 test-net:

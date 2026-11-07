@@ -13,6 +13,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -149,8 +150,12 @@ func quickMode() error {
 	fmt.Println()
 	fmt.Print("  输入数字后回车 (直接回车 = 1): ")
 
+	// Keep one reader so custom-mode prompts continue on the same buffered
+	// stream instead of discarding whatever was read ahead.
+	in := bufio.NewReader(os.Stdin)
+
 	// Read a whole line so EOF / empty input / piped stdin all behave sanely.
-	line, _ := bufio.NewReader(os.Stdin).ReadString('\n')
+	line, _ := in.ReadString('\n')
 	line = strings.TrimSpace(line)
 	if line == "" {
 		line = "1"
@@ -168,7 +173,14 @@ func quickMode() error {
 	case "3":
 		preset, duration = config.PresetPi, time.Hour
 	case "0":
-		return runCmd(nil)
+		args, err := quickCustom(in, os.Stdout)
+		if err != nil {
+			return err
+		}
+		fmt.Println("\n  正在以自定义参数启动... (按 q 可提前停止并生成报告)")
+		fmt.Println()
+		time.Sleep(700 * time.Millisecond)
+		return runCmd(args)
 	default:
 		return fmt.Errorf("无效选择 %q", line)
 	}
@@ -181,6 +193,57 @@ func quickMode() error {
 
 	args := []string{"--preset=" + string(preset), "--duration=" + duration.String(), "--out=" + out}
 	return runCmd(args)
+}
+
+// promptQuick prints a prompt and returns the trimmed answer, falling back to
+// def when the user just presses enter (or stdin ends).
+func promptQuick(r *bufio.Reader, w io.Writer, label, def string) string {
+	if def != "" {
+		fmt.Fprintf(w, "  %s [回车=%s]: ", label, def)
+	} else {
+		fmt.Fprintf(w, "  %s: ", label)
+	}
+	line, _ := r.ReadString('\n')
+	if line = strings.TrimSpace(line); line == "" {
+		return def
+	}
+	return line
+}
+
+// quickCustom interactively collects the most useful `nethole run` flags.
+// Selecting "0) 自定义参数" used to fall straight through to the defaults,
+// so this prompts for real values instead.
+func quickCustom(r *bufio.Reader, w io.Writer) ([]string, error) {
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "  自定义参数 / custom settings (直接回车使用方括号内的默认值)")
+
+	preset := promptQuick(r, w, "预设 preset (dorm|mobile5g|pi24x7)", string(config.PresetDorm))
+	switch config.PresetName(preset) {
+	case config.PresetDorm, config.PresetMobile, config.PresetPi:
+	default:
+		return nil, fmt.Errorf("无效预设 %q (可选 dorm|mobile5g|pi24x7)", preset)
+	}
+
+	durStr := promptQuick(r, w, "运行时长 duration (如 10m；0 = 直到 Ctrl+C)", "10m")
+	duration, err := time.ParseDuration(durStr)
+	if err != nil || duration < 0 {
+		return nil, fmt.Errorf("无效时长 %q (需 >= 0)", durStr)
+	}
+
+	intervalStr := promptQuick(r, w, "探测间隔 interval (如 1s，最小 200ms)", "1s")
+	interval, err := time.ParseDuration(intervalStr)
+	if err != nil || interval < 200*time.Millisecond {
+		return nil, fmt.Errorf("无效间隔 %q (需 >= 200ms)", intervalStr)
+	}
+
+	out := promptQuick(r, w, "输出目录 out", "./nethole-out")
+
+	return []string{
+		"--preset=" + preset,
+		"--duration=" + duration.String(),
+		"--interval=" + interval.String(),
+		"--out=" + out,
+	}, nil
 }
 
 // ---------------------------------------------------------------------------
@@ -294,6 +357,9 @@ func execute(cfg config.Config) error {
 
 	var uiErr error
 	if cfg.Headless {
+		// No TUI consumes frames, so drain (and discard) them. Otherwise the
+		// engine blocks on the channel once its buffer fills and probes stall.
+		go drainFrames(frames)
 		fmt.Printf("NetHole-Tester running headless: preset=%s interval=%s out=%s\n", cfg.Name, cfg.Interval, cfg.OutDir)
 		fmt.Println("Press Ctrl+C to stop.")
 		<-ctx.Done()
@@ -313,6 +379,13 @@ func execute(cfg config.Config) error {
 		return uiErr
 	}
 	return finish(cfg)
+}
+
+// drainFrames discards UI frames until the engine closes the channel. It is
+// used in headless mode, where nothing else reads frames.
+func drainFrames(frames <-chan ui.Frame) {
+	for range frames {
+	}
 }
 
 // liveEvent tracks an event that is currently open.
@@ -505,24 +578,30 @@ func finish(cfg config.Config) error {
 	report.WriteText(os.Stdout, a)
 
 	htmlPath := filepath.Join(cfg.OutDir, "report.html")
-	if f, err := os.Create(htmlPath); err == nil {
-		_ = report.WriteHTML(f, a)
-		_ = f.Close()
-	}
 	csvPath := filepath.Join(cfg.OutDir, "samples.csv")
-	if f, err := os.Create(csvPath); err == nil {
-		_ = analyze.WriteCSV(f, samples)
-		_ = f.Close()
-	}
 	evCsvPath := filepath.Join(cfg.OutDir, "events.csv")
-	if f, err := os.Create(evCsvPath); err == nil {
-		_ = analyze.WriteEventsCSV(f, events)
-		_ = f.Close()
-	}
 	complaintPath := filepath.Join(cfg.OutDir, "complaint.txt")
-	if f, err := os.Create(complaintPath); err == nil {
-		report.WriteComplaint(f, a, report.Meta{Location: "", Account: ""})
-		_ = f.Close()
+
+	writes := []struct {
+		name string
+		path string
+		fn   func(io.Writer) error
+	}{
+		{"HTML 报告", htmlPath, func(w io.Writer) error { return report.WriteHTML(w, a) }},
+		{"CSV 数据", csvPath, func(w io.Writer) error { return analyze.WriteCSV(w, samples) }},
+		{"CSV 事件", evCsvPath, func(w io.Writer) error { return analyze.WriteEventsCSV(w, events) }},
+		{"申诉报告", complaintPath, func(w io.Writer) error {
+			report.WriteComplaint(w, a, report.Meta{Location: "", Account: ""})
+			return nil
+		}},
+	}
+
+	var writeErrs []error
+	for _, item := range writes {
+		if err := writeReportFile(item.path, item.fn); err != nil {
+			fmt.Fprintf(os.Stderr, "warn: %s 写入失败 (%s): %v\n", item.name, item.path, err)
+			writeErrs = append(writeErrs, err)
+		}
 	}
 
 	fmt.Println("已生成 / generated:")
@@ -530,6 +609,27 @@ func finish(cfg config.Config) error {
 	fmt.Println("  申诉报告 :", complaintPath)
 	fmt.Println("  CSV 数据 :", csvPath, ",", evCsvPath)
 	fmt.Println("  原始日志 :", cfg.SamplesOut, ",", cfg.EventsOut)
+	if len(writeErrs) > 0 {
+		return fmt.Errorf("部分报告写入失败 (%d/%d)，请检查 %s 的磁盘空间与写入权限: %w",
+			len(writeErrs), len(writes), cfg.OutDir, errors.Join(writeErrs...))
+	}
+	return nil
+}
+
+// writeReportFile creates path, runs fn, and closes the file while preserving
+// create/write/close errors so finish can report which report failed and why.
+func writeReportFile(path string, fn func(io.Writer) error) error {
+	f, err := os.Create(path)
+	if err != nil {
+		return fmt.Errorf("创建文件失败: %w", err)
+	}
+	if err := fn(f); err != nil {
+		_ = f.Close()
+		return fmt.Errorf("写入失败: %w", err)
+	}
+	if err := f.Close(); err != nil {
+		return fmt.Errorf("关闭文件失败: %w", err)
+	}
 	return nil
 }
 
