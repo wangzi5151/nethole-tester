@@ -2,6 +2,8 @@ package probe
 
 import (
 	"context"
+	"errors"
+	"os"
 	"testing"
 	"time"
 )
@@ -15,6 +17,14 @@ func TestICMP(t *testing.T) {
 	}
 	p, err := NewICMP("1.1.1.1")
 	if err != nil {
+		// The production Runner degrades gracefully when no ICMP socket can
+		// be opened (unprivileged containers, ping_group_range=0, Windows
+		// without admin): it warns and continues with TCP/DNS. A permission
+		// failure here is an environment limit, not a code bug, so skip —
+		// any other construction error is still fatal.
+		if errors.Is(err, os.ErrPermission) {
+			t.Skipf("ICMP socket not permitted in this environment: %v", err)
+		}
 		t.Fatalf("NewICMP: %v", err)
 	}
 	defer p.Close()
