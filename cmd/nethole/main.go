@@ -267,6 +267,13 @@ func runCmd(args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
+	// Negative overrides used to be silently ignored (only > 0 values were
+	// applied), so `--duration=-5m` quietly ran with the preset duration.
+	// Reject them, mirroring quickCustom's input validation.
+	if *duration < 0 || *interval < 0 || *spike < 0 || *lossBurst < 0 {
+		return fmt.Errorf("negative values are not allowed: --duration=%s --interval=%s --spike-ms=%v --loss-burst=%d",
+			*duration, *interval, *spike, *lossBurst)
+	}
 
 	cfg, err := config.Preset(config.PresetName(*preset), *out)
 	if err != nil {
@@ -669,33 +676,33 @@ func reportCmd(args []string) error {
 	if *outHTML == "" {
 		*outHTML = filepath.Join(*in, "report.html")
 	}
-	if f, err := os.Create(*outHTML); err == nil {
-		_ = report.WriteHTML(f, a)
-		_ = f.Close()
-		fmt.Println("HTML 报告 written:", *outHTML)
-	} else {
-		return err
+	// Use the same writeReportFile helper as finish(): create/write/close
+	// errors must be reported, not swallowed. Previously a failed CSV or
+	// complaint write (full disk, read-only directory) exited 0 silently.
+	if err := writeReportFile(*outHTML, func(w io.Writer) error { return report.WriteHTML(w, a) }); err != nil {
+		return fmt.Errorf("HTML 报告 写入失败 (%s): %w", *outHTML, err)
 	}
+	fmt.Println("HTML 报告 written:", *outHTML)
 
 	if *outCSV == "" {
 		*outCSV = filepath.Join(*in, "samples.csv")
 	}
-	if f, err := os.Create(*outCSV); err == nil {
-		_ = analyze.WriteCSV(f, samples)
-		_ = f.Close()
-		fmt.Println("CSV written:", *outCSV)
+	if err := writeReportFile(*outCSV, func(w io.Writer) error { return analyze.WriteCSV(w, samples) }); err != nil {
+		return fmt.Errorf("CSV 写入失败 (%s): %w", *outCSV, err)
 	}
+	fmt.Println("CSV written:", *outCSV)
 
 	if *complaint {
 		path := filepath.Join(*in, "complaint.txt")
-		f, err := os.Create(path)
-		if err != nil {
-			return err
-		}
-		report.WriteComplaint(f, a, report.Meta{
-			Operator: *operator, Account: *account, Contact: *contact, Location: *location,
+		err := writeReportFile(path, func(w io.Writer) error {
+			report.WriteComplaint(w, a, report.Meta{
+				Operator: *operator, Account: *account, Contact: *contact, Location: *location,
+			})
+			return nil
 		})
-		_ = f.Close()
+		if err != nil {
+			return fmt.Errorf("申诉报告 写入失败 (%s): %w", path, err)
+		}
 		fmt.Println("申诉报告 Complaint written:", path)
 	}
 	return nil
