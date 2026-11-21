@@ -188,12 +188,31 @@ func Preset(name PresetName, outDir string) (Config, error) {
 }
 
 // Validate performs light sanity checks before a run starts.
+//
+// Sync fills defaults for zero-valued fields, but it deliberately does not
+// rescue negative durations or a non-positive LossBurst: those are caller
+// errors (e.g. a negative --duration flag) and must fail loudly instead of
+// silently running with different parameters than the user asked for. A
+// LossBurst below 1 would also make the detector fire a hole event on the
+// very first failed probe.
 func (c *Config) Validate() error {
 	if c.Interval < 200*time.Millisecond {
 		return fmt.Errorf("interval %s is too aggressive; minimum 200ms to avoid flooding", c.Interval)
 	}
 	if c.Timeout > 5*time.Second {
 		return fmt.Errorf("timeout %s is too large; maximum 5s", c.Timeout)
+	}
+	if c.Duration < 0 {
+		return fmt.Errorf("duration %s is negative", c.Duration)
+	}
+	if c.Thresholds.LossBurst < 1 {
+		return fmt.Errorf("loss burst %d is invalid; minimum 1 consecutive failure", c.Thresholds.LossBurst)
+	}
+	if c.Thresholds.LatencySpikeMs < 0 {
+		return fmt.Errorf("latency spike threshold %.1fms is negative", c.Thresholds.LatencySpikeMs)
+	}
+	if c.Thresholds.SpikeFloorMs < 0 {
+		return fmt.Errorf("spike floor %.1fms is negative", c.Thresholds.SpikeFloorMs)
 	}
 	if len(c.ICMPTargets)+len(c.TCPTargets)+len(c.DNSServers) == 0 {
 		return fmt.Errorf("no probe targets configured")

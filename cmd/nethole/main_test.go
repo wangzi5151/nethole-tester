@@ -165,3 +165,42 @@ func TestFinishReportsWriteErrors(t *testing.T) {
 		t.Fatal("finish succeeded even though reports could not be written")
 	}
 }
+
+func TestReportCmdWritesAllReports(t *testing.T) {
+	dir := t.TempDir()
+	writeTestRun(t, dir)
+	if err := reportCmd([]string{"--in=" + dir}); err != nil {
+		t.Fatalf("reportCmd: %v", err)
+	}
+	for _, name := range []string{"report.html", "samples.csv", "complaint.txt"} {
+		if info, err := os.Stat(filepath.Join(dir, name)); err != nil || info.Size() == 0 {
+			t.Fatalf("reportCmd did not write a non-empty %s (err=%v)", name, err)
+		}
+	}
+}
+
+func TestReportCmdReportsWriteErrors(t *testing.T) {
+	dir := t.TempDir()
+	writeTestRun(t, dir)
+	// A directory where report.html should go makes os.Create fail; the
+	// command must surface that instead of exiting 0 with no report.
+	if err := os.Mkdir(filepath.Join(dir, "report.html"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := reportCmd([]string{"--in=" + dir}); err == nil {
+		t.Fatal("reportCmd succeeded even though report.html could not be written")
+	}
+}
+
+func TestRunCmdRejectsNegativeOverrides(t *testing.T) {
+	for _, args := range [][]string{
+		{"--duration=-5m"},
+		{"--interval=-1s"},
+		{"--spike-ms=-1"},
+		{"--loss-burst=-1"},
+	} {
+		if err := runCmd(args); err == nil {
+			t.Fatalf("runCmd(%v) accepted a negative override", args)
+		}
+	}
+}
