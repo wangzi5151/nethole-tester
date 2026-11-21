@@ -11,6 +11,7 @@
 **抓住那些「网没断，但就是卡」的瞬间。**
 **Catch the invisible outages your ISP swears don't exist.**
 
+[![CI](https://github.com/wangzi5151/nethole-tester/actions/workflows/ci.yml/badge.svg)](https://github.com/wangzi5151/nethole-tester/actions/workflows/ci.yml)
 [![Go](https://img.shields.io/badge/Go-1.23%2B-00ADD8?logo=go&logoColor=white)](https://go.dev)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-linux%20%7C%20arm%20%7C%20termux%20%7C%20win%20%7C%20mac-2ea44f)](#安装--install)
@@ -364,6 +365,9 @@ grep -rniE "http://|https://|analytics|telemetry|upload" --include=*.go ./intern
 
 > Please do not abuse this tool for stress-testing or flooding. Probe only networks
 > you are authorized to use. Rate limits are deliberately conservative.
+>
+> 发现安全问题？请按 [SECURITY.md](SECURITY.md) 私密报告，不要开公开 Issue。
+> Found a security issue? Please report it privately via [SECURITY.md](SECURITY.md).
 
 ---
 
